@@ -1,0 +1,312 @@
+{
+  "info": {
+    "name": "Foodie - Payment System (Swiggy Style)",
+    "description": "Complete payment flow: COD + Rider Wallet Freeze + Distance Surcharge + Restaurant Commission + Weekly Payouts",
+    "_postman_id": "foodie-payment-system-v1",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "BASE_URL", "value": "http://192.168.43.215:5000", "type": "string" },
+    { "key": "RIDER_TOKEN", "value": "", "type": "string" },
+    { "key": "RESTAURANT_TOKEN", "value": "", "type": "string" },
+    { "key": "ADMIN_TOKEN", "value": "", "type": "string" },
+    { "key": "ORDER_ID", "value": "", "type": "string" },
+    { "key": "RIDER_ID", "value": "", "type": "string" },
+    { "key": "RESTAURANT_ID", "value": "", "type": "string" }
+  ],
+  "item": [
+    {
+      "name": "🧮 1. Utility",
+      "item": [
+        {
+          "name": "Calculate Delivery Fee (by distance)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{RIDER_TOKEN}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{BASE_URL}}/api/payment/calculate-delivery-fee", "host": ["{{BASE_URL}}"], "path": ["api", "payment", "calculate-delivery-fee"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"distanceKm\": 3.5\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Returns delivery fee breakdown. For >2km, adds ₹10/km surcharge. Rider gets ₹5/km bonus.\n\n**Example distances:**\n- 1.5km → base ₹30, no surcharge\n- 3km → base ₹30 + ₹10 surcharge = ₹40\n- 5km → base ₹30 + ₹30 surcharge = ₹60"
+          }
+        }
+      ]
+    },
+    {
+      "name": "🚴 2. Rider Flows",
+      "item": [
+        {
+          "name": "2a. Rider: Check My Wallet",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{RIDER_TOKEN}}" }],
+            "url": { "raw": "{{BASE_URL}}/api/payment/rider/wallet", "host": ["{{BASE_URL}}"], "path": ["api", "payment", "rider", "wallet"] },
+            "description": "Rider checks:\n- cashInHand (COD collected)\n- cashLimit (freeze threshold)\n- availableBalance (earnings)\n- isFrozen status\n- frozenReason (if frozen)\n\n⚠️ If isFrozen=true → rider CANNOT accept new COD orders"
+          }
+        },
+        {
+          "name": "2b. Rider: Confirm COD Collected (Short Distance ≤2km)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{RIDER_TOKEN}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{BASE_URL}}/api/payment/cod/confirm", "host": ["{{BASE_URL}}"], "path": ["api", "payment", "cod", "confirm"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"orderId\": \"{{ORDER_ID}}\",\n  \"amountCollected\": 350\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Rider confirms cash collected from customer.\n\n**Triggers:**\n1. Adds ₹350 to rider's cashInHand\n2. Credits ₹25 rider earning (flat delivery fee)\n3. Checks if cashInHand >= cashLimit → if YES, freezes account\n4. Auto-credits restaurant commission\n\n**Important:** Order must be in status='delivered' before calling this"
+          }
+        },
+        {
+          "name": "2c. Rider: Confirm COD Collected (Long Distance >2km)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{RIDER_TOKEN}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{BASE_URL}}/api/payment/cod/confirm", "host": ["{{BASE_URL}}"], "path": ["api", "payment", "cod", "confirm"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"orderId\": \"{{ORDER_ID}}\",\n  \"amountCollected\": 420\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "For long-distance orders (>2km), the order already includes the distance surcharge in totalAmount.\n\nRider also gets ₹5/km bonus on top of ₹25 flat.\n**Example: 4km delivery → rider earns ₹25 + ₹10 (2 extra km × ₹5) = ₹35**"
+          }
+        }
+      ]
+    },
+    {
+      "name": "🏪 3. Restaurant Flows",
+      "item": [
+        {
+          "name": "3a. Restaurant: Check My Wallet",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{RESTAURANT_TOKEN}}" }],
+            "url": { "raw": "{{BASE_URL}}/api/payment/restaurant/wallet", "host": ["{{BASE_URL}}"], "path": ["api", "payment", "restaurant", "wallet"] },
+            "description": "Restaurant owner checks:\n- balance (current pending payout)\n- pendingAmount (will be paid next Sunday)\n- totalEarnings (all-time)\n- totalPaidOut (all-time)\n- nextPayoutDate (next Sunday)\n- Recent transactions\n\n**Commission is auto-credited on every delivered order.**"
+          }
+        }
+      ]
+    },
+    {
+      "name": "👮 4. Admin: Rider Management",
+      "item": [
+        {
+          "name": "4a. Admin: List All Frozen Riders",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{ADMIN_TOKEN}}" }],
+            "url": { "raw": "{{BASE_URL}}/api/payment/rider/frozen-riders", "host": ["{{BASE_URL}}"], "path": ["api", "payment", "rider", "frozen-riders"] },
+            "description": "See all riders whose accounts are frozen.\nEach record shows:\n- riderName, cashInHand, cashLimit\n- frozenAt, frozenReason\n\n**Use this to collect cash from riders and then unfreeze them.**"
+          }
+        },
+        {
+          "name": "4b. Admin: View Specific Rider Wallet",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{ADMIN_TOKEN}}" }],
+            "url": { "raw": "{{BASE_URL}}/api/payment/rider/wallet/{{RIDER_ID}}", "host": ["{{BASE_URL}}"], "path": ["api", "payment", "rider", "wallet", "{{RIDER_ID}}"] },
+            "description": "Admin checks a specific rider's full wallet details + 50 recent transactions."
+          }
+        },
+        {
+          "name": "4c. Admin: Confirm Rider Cash Deposit (UNFREEZE)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{ADMIN_TOKEN}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{BASE_URL}}/api/payment/rider/deposit", "host": ["{{BASE_URL}}"], "path": ["api", "payment", "rider", "deposit"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"riderId\": \"{{RIDER_ID}}\",\n  \"amount\": 2000\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Admin physically receives cash from rider and confirms in system.\n\n**Flow:**\n1. Rider brings cash to admin/hub\n2. Admin counts cash and confirms\n3. cashInHand decreases by deposit amount\n4. If cashInHand < cashLimit → account UNFREEZES automatically\n5. Rider can now accept new COD orders\n\n**Partial deposit is supported** - if limit is ₹2000 and rider has ₹3500, depositing ₹1600 → still has ₹1900, still frozen. Deposit remaining ₹1900 to unfreeze."
+          }
+        },
+        {
+          "name": "4d. Admin: Set Rider Cash Limit",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{ADMIN_TOKEN}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{BASE_URL}}/api/payment/rider/cash-limit", "host": ["{{BASE_URL}}"], "path": ["api", "payment", "rider", "cash-limit"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"riderId\": \"{{RIDER_ID}}\",\n  \"cashLimit\": 3000\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Admin sets or updates the rider's COD cash limit.\n\nDefault limit: ₹2000\nAdmin can increase for trusted riders, decrease for new/risky riders.\n\n**If new limit is lower than current cashInHand → rider gets frozen immediately.**"
+          }
+        }
+      ]
+    },
+    {
+      "name": "👮 5. Admin: Restaurant Management",
+      "item": [
+        {
+          "name": "5a. Admin: View Restaurant Wallet",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{ADMIN_TOKEN}}" }],
+            "url": { "raw": "{{BASE_URL}}/api/payment/restaurant/wallet/{{RESTAURANT_ID}}", "host": ["{{BASE_URL}}"], "path": ["api", "payment", "restaurant", "wallet", "{{RESTAURANT_ID}}"] },
+            "description": "Admin views any restaurant's wallet details + transaction history."
+          }
+        }
+      ]
+    },
+    {
+      "name": "👮 6. Admin: Finance Dashboard",
+      "item": [
+        {
+          "name": "6a. Admin: Platform Financial Summary",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{ADMIN_TOKEN}}" }],
+            "url": { "raw": "{{BASE_URL}}/api/payment/admin/summary", "host": ["{{BASE_URL}}"], "path": ["api", "payment", "admin", "summary"] },
+            "description": "Returns:\n- totalCODCollected\n- totalOnlinePayments\n- totalCommissionEarned (platform revenue)\n- totalPaidOut (to restaurants + riders)\n- frozenRidersCount\n- pendingRestaurantPayouts"
+          }
+        },
+        {
+          "name": "6b. Admin: All Transactions (paginated)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{ADMIN_TOKEN}}" }],
+            "url": {
+              "raw": "{{BASE_URL}}/api/payment/admin/transactions?page=1&limit=20&type=cod_collected",
+              "host": ["{{BASE_URL}}"],
+              "path": ["api", "payment", "admin", "transactions"],
+              "query": [
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "20" },
+                { "key": "type", "value": "cod_collected", "description": "Filter by type: cod_collected | restaurant_commission | rider_weekly_payout | restaurant_weekly_payout | cod_deposit | rider_freeze | rider_unfreeze | online_payment" }
+              ]
+            },
+            "description": "View all financial transactions with optional type filter.\n\nTransaction types:\n- `cod_collected` - Rider collected cash from customer\n- `cod_deposit` - Rider deposited cash to admin\n- `restaurant_commission` - Commission auto-credited to restaurant\n- `rider_earning_credit` - Platform credited rider\n- `restaurant_weekly_payout` - Weekly payout to restaurant\n- `rider_weekly_payout` - Weekly earning payout to rider\n- `distance_surcharge` - Extra fee for >2km delivery\n- `rider_freeze` / `rider_unfreeze` - Account freeze events\n- `online_payment` / `wallet_payment` - Digital payments"
+          }
+        },
+        {
+          "name": "6c. Admin: Trigger Weekly Payout NOW",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{ADMIN_TOKEN}}" }],
+            "url": { "raw": "{{BASE_URL}}/api/payment/admin/weekly-payout", "host": ["{{BASE_URL}}"], "path": ["api", "payment", "admin", "weekly-payout"] },
+            "description": "Manually trigger the weekly payout cycle.\n\n**Normally runs automatically every Sunday at 12:00 AM via cron job.**\nUse this to trigger manually for testing or special cases.\n\nAction:\n- Pays out all restaurants with pending balance\n- Pays out all riders with available earnings\n- Resets wallet balances to 0\n- Records all payout transactions"
+          }
+        }
+      ]
+    },
+    {
+      "name": "📋 7. Complete Flow - Step by Step",
+      "item": [
+        {
+          "name": "STEP 1: Customer places COD order",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{CUSTOMER_TOKEN}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{BASE_URL}}/api/orders/place", "host": ["{{BASE_URL}}"], "path": ["api", "orders", "place"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"restaurantId\": \"{{RESTAURANT_ID}}\",\n  \"items\": [\n    { \"productId\": \"PRODUCT_ID\", \"quantity\": 2, \"price\": 150 }\n  ],\n  \"paymentMethod\": \"cod\",\n  \"deliveryAddress\": {\n    \"addressLine\": \"123 Main St, Indore\",\n    \"coordinates\": [75.8577, 22.7196]\n  },\n  \"deliveryDistanceKm\": 3.2\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Customer places order with paymentMethod='cod'.\n\n⚡ **Distance surcharge automatically added:**\n- 3.2km → 1.2km extra → ₹12 surcharge\n- deliveryFee = ₹30 + ₹12 = ₹42"
+          }
+        },
+        {
+          "name": "STEP 2: Restaurant accepts order",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{RESTAURANT_TOKEN}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{BASE_URL}}/api/orders/{{ORDER_ID}}/status", "host": ["{{BASE_URL}}"], "path": ["api", "orders", "{{ORDER_ID}}", "status"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{ \"status\": \"accepted\" }",
+              "options": { "raw": { "language": "json" } }
+            }
+          }
+        },
+        {
+          "name": "STEP 3: Rider picks up and delivers",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{RIDER_TOKEN}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{BASE_URL}}/api/orders/{{ORDER_ID}}/status", "host": ["{{BASE_URL}}"], "path": ["api", "orders", "{{ORDER_ID}}", "status"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{ \"status\": \"delivered\" }",
+              "options": { "raw": { "language": "json" } }
+            }
+          }
+        },
+        {
+          "name": "STEP 4: Rider confirms COD cash collected",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{RIDER_TOKEN}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{BASE_URL}}/api/payment/cod/confirm", "host": ["{{BASE_URL}}"], "path": ["api", "payment", "cod", "confirm"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"orderId\": \"{{ORDER_ID}}\",\n  \"amountCollected\": 342\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "After delivery:\n✅ cashInHand += ₹342\n✅ Rider earning: ₹25 + ₹6 (distance bonus) = ₹31\n✅ Restaurant commission auto-credited\n⚠️ If cashInHand >= cashLimit → ACCOUNT FROZEN!"
+          }
+        },
+        {
+          "name": "STEP 5a: [IF FROZEN] Rider deposits cash",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{ADMIN_TOKEN}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{BASE_URL}}/api/payment/rider/deposit", "host": ["{{BASE_URL}}"], "path": ["api", "payment", "rider", "deposit"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"riderId\": \"{{RIDER_ID}}\",\n  \"amount\": 2000\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Rider physically hands cash to admin/hub manager.\nAdmin confirms in system → rider account UNFROZEN."
+          }
+        },
+        {
+          "name": "STEP 5b: [EVERY SUNDAY] Weekly Payout",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{ADMIN_TOKEN}}" }],
+            "url": { "raw": "{{BASE_URL}}/api/payment/admin/weekly-payout", "host": ["{{BASE_URL}}"], "path": ["api", "payment", "admin", "weekly-payout"] },
+            "description": "Runs automatically every Sunday via cron.\nPays out all pending amounts to restaurants and riders."
+          }
+        }
+      ]
+    }
+  ]
+}
