@@ -1,0 +1,17 @@
+const express = require('express');
+const router = express.Router();
+const reviewController = require('../controllers/reviewController');
+const { protect, admin, restaurantOwner, rider } = require('../middleware/authMiddleware');
+router.get('/restaurant/:restaurantId', reviewController.getReviewsByRestaurant);
+router.get('/order/:orderId', reviewController.getReviewByOrderId);
+router.post('/', protect, reviewController.createReview);
+router.get('/my-reviews', protect, reviewController.getMyReviews);
+router.put('/:id', protect, reviewController.updateReview);
+router.delete('/:id', protect, reviewController.deleteReview);
+router.get('/my-restaurant-reviews', protect, restaurantOwner, reviewController.getMyRestaurantReviews);
+router.get('/my-rider-reviews', protect, rider, reviewController.getMyRiderReviews);
+router.get('/admin/all', protect, admin, reviewController.getAllReviewsAdmin);
+router.get('/admin/stats', protect, admin, reviewController.getReviewStats);
+router.get('/rider/:riderId', protect, admin, reviewController.getReviewsByRider);
+router.patch('/admin/:id/moderate', protect, admin, reviewController.adminModerateReview);
+module.exports = router;
