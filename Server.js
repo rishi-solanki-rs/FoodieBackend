@@ -35,7 +35,7 @@ const server = http.createServer(app);
 app.set('trust proxy', 1);
 const io = socketIO(server, {
   cors: {
-    origin: ['*', "http://localhost:3001", "http://localhost:8081", "https://foodie-admin-sandy.vercel.app", "https://waseeny.vercel.app"],
+    origin: ['*', "https://foodie-adminn.vercel.app", "http://localhost:3001", "http://localhost:8081", "https://foodie-admin-sandy.vercel.app", "https://waseeny.vercel.app"],
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"]
@@ -50,7 +50,7 @@ const initPaymentCronJobs = require('./services/paymentCronJobs'); // NEW: weekl
 initPaymentCronJobs();
 app.use(cookieParser());
 app.use(cors({
-  origin: ['*', "http://localhost:3001", "http://localhost:8081", "https://foodie-admin-sandy.vercel.app", "https://waseeny.vercel.app"],
+  origin: ['*', "https://foodie-adminn.vercel.app", "http://localhost:3001", "http://localhost:8081", "https://foodie-admin-sandy.vercel.app", "https://waseeny.vercel.app"],
   credentials: true,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization"]
