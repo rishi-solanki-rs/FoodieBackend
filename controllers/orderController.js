@@ -1910,11 +1910,13 @@ exports.reportIssue = async (req, res) => {
 exports.getAllOrdersAdmin = async (req, res) => {
   try {
     const { page, limit, skip } = getPaginationParams(req, 50);
-    const { status, date, orderId, rider } = req.query;
+    const { status, date, orderId, rider, restaurant, restaurantId } = req.query;
     let query = {};
     if (status && status !== "all") query.status = status;
     if (orderId) query._id = orderId;
     if (rider) query.rider = rider;
+    if (restaurant) query.restaurant = restaurant;
+    if (restaurantId) query.restaurant = restaurantId;
     if (date) {
       const start = new Date(date);
       const end = new Date(date);

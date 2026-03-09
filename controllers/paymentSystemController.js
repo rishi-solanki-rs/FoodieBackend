@@ -13,6 +13,7 @@ const PaymentTransaction = require('../models/PaymentTransaction');
 const Order = require('../models/Order');
 const Rider = require('../models/Rider');
 const Restaurant = require('../models/Restaurant');
+const Payout = require('../models/Payout');
 exports.confirmCODCollection = async (req, res) => {
   try {
     const { orderId, amountCollected } = req.body;
@@ -75,8 +76,8 @@ exports.getRiderWallet = async (req, res) => {
         warning: wallet.isFrozen
           ? `🚫 Account frozen! You have ₹${wallet.cashInHand} cash. Please deposit to admin to re-activate.`
           : wallet.cashInHand >= wallet.cashLimit * 0.8
-          ? `⚠️ You have ₹${wallet.cashInHand}/${wallet.cashLimit} cash. Near limit!`
-          : null,
+            ? `⚠️ You have ₹${wallet.cashInHand}/${wallet.cashLimit} cash. Near limit!`
+            : null,
         recentTransactions
       }
     });
@@ -282,7 +283,7 @@ exports.getAllRestaurantWallets = async (req, res) => {
     const restaurants = await Restaurant.find({ isActive: true })
       .select('name email phoneNumber')
       .lean();
-    
+
     const restaurantWallets = await Promise.all(
       restaurants.map(async (restaurant) => {
         const wallet = await RestaurantWallet.findOne({ restaurant: restaurant._id }).lean();
@@ -295,7 +296,7 @@ exports.getAllRestaurantWallets = async (req, res) => {
         };
       })
     );
-    
+
     return res.status(200).json({
       success: true,
       data: restaurantWallets
@@ -312,7 +313,7 @@ exports.getAllRiderWallets = async (req, res) => {
       .populate('user', 'firstName lastName phoneNumber email')
       .select('user totalDeliveries averageRating')
       .lean();
-    
+
     const riderWallets = await Promise.all(
       riders.map(async (rider) => {
         const wallet = await RiderWallet.findOne({ rider: rider._id }).lean();
@@ -327,11 +328,79 @@ exports.getAllRiderWallets = async (req, res) => {
         };
       })
     );
-    
+
     return res.status(200).json({
       success: true,
       data: riderWallets
     });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.getRiderPayouts = async (req, res) => {
+  try {
+    const { riderId } = req.params;
+    const [payouts, total] = await Promise.all([
+      Payout.find({ rider: riderId }).sort({ createdAt: -1 }).limit(50).populate('processedBy', 'firstName lastName').lean(),
+      Payout.countDocuments({ rider: riderId })
+    ]);
+    return res.status(200).json({ success: true, data: { payouts, total } });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.getRestaurantPayouts = async (req, res) => {
+  try {
+    const { restaurantId } = req.params;
+    const [payouts, total] = await Promise.all([
+      Payout.find({ restaurant: restaurantId }).sort({ createdAt: -1 }).limit(50).populate('processedBy', 'firstName lastName').lean(),
+      Payout.countDocuments({ restaurant: restaurantId })
+    ]);
+    return res.status(200).json({ success: true, data: { payouts, total } });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.createRiderPayout = async (req, res) => {
+  try {
+    const { riderId, amount, paymentMethod = 'bank_transfer', notes } = req.body;
+    if (!riderId || !amount) return res.status(400).json({ success: false, message: 'riderId and amount are required' });
+    const rider = await Rider.findById(riderId);
+    if (!rider) return res.status(404).json({ success: false, message: 'Rider not found' });
+    const wallet = await RiderWallet.findOne({ rider: riderId });
+    if (!wallet) return res.status(404).json({ success: false, message: 'Wallet not found' });
+    if (wallet.balance < amount) return res.status(400).json({ success: false, message: `Insufficient balance. Available: ₹${wallet.balance}` });
+    const payout = await Payout.create({ rider: riderId, amount, paymentMethod, notes, status: 'pending', processedBy: req.user._id });
+    wallet.balance -= amount;
+    wallet.totalPaidOut += amount;
+    wallet.lastPayoutAt = new Date();
+    wallet.lastPayoutAmount = amount;
+    await wallet.save();
+    return res.status(201).json({ success: true, message: 'Payout created successfully', data: payout });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.createRestaurantPayout = async (req, res) => {
+  try {
+    const { restaurantId, amount, paymentMethod = 'bank_transfer', notes } = req.body;
+    if (!restaurantId || !amount) return res.status(400).json({ success: false, message: 'restaurantId and amount are required' });
+    const restaurant = await Restaurant.findById(restaurantId);
+    if (!restaurant) return res.status(404).json({ success: false, message: 'Restaurant not found' });
+    const wallet = await RestaurantWallet.findOne({ restaurant: restaurantId });
+    if (!wallet) return res.status(404).json({ success: false, message: 'Wallet not found' });
+    if (wallet.balance < amount) return res.status(400).json({ success: false, message: `Insufficient balance. Available: ₹${wallet.balance}` });
+    const payout = await Payout.create({ restaurant: restaurantId, amount, paymentMethod, notes, status: 'pending', processedBy: req.user._id });
+    wallet.balance -= amount;
+    wallet.totalPaidOut += amount;
+    wallet.lastPayoutAt = new Date();
+    wallet.lastPayoutAmount = amount;
+    await wallet.save();
+    return res.status(201).json({ success: true, message: 'Payout created successfully', data: payout });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }

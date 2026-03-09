@@ -15,6 +15,10 @@ const {
   getAllTransactions,
   getAllRestaurantWallets,
   getAllRiderWallets,
+  getRiderPayouts,
+  getRestaurantPayouts,
+  createRiderPayout,
+  createRestaurantPayout,
 } = require('../controllers/paymentSystemController');
 const { protect, admin, rider, restaurantOwner } = require('../middleware/authMiddleware');
 router.post('/calculate-delivery-fee', protect, calculateDeliveryFee);
@@ -31,4 +35,9 @@ router.post('/admin/weekly-payout', protect, admin, triggerWeeklyPayout);
 router.get('/admin/transactions', protect, admin, getAllTransactions);
 router.get('/restaurants/wallets', protect, admin, getAllRestaurantWallets);
 router.get('/riders/wallets', protect, admin, getAllRiderWallets);
+router.get('/rider/payouts/:riderId', protect, admin, getRiderPayouts);
+router.post('/rider/payout/create', protect, admin, createRiderPayout);
+router.get('/restaurant/payouts/:restaurantId', protect, admin, getRestaurantPayouts);
+router.post('/restaurant/payout/create', protect, admin, createRestaurantPayout);
+
 module.exports = router;
