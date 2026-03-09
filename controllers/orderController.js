@@ -7,6 +7,7 @@ const User = require("../models/User");
 const WalletTransaction = require("../models/WalletTransaction");
 const Promocode = require("../models/Promocode");
 const Review = require("../models/Review"); // New
+const AdminSetting = require("../models/AdminSettings"); // Added
 const mongoose = require("mongoose");
 const { sendNotification } = require("../utils/notificationService");
 const { sendOTP } = require("../services/smsService");
