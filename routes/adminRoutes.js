@@ -152,9 +152,7 @@ router.delete("/master-category/:id", protect, admin, deleteMasterCategory);
 router.get("/restaurant-categories", protect, admin, getAllRestaurantCategories);
 router.get("/restaurant-categories/:id", protect, admin, getRestaurantCategoryById);
 router.put("/restaurant-categories/:id", protect, admin, upload.single('image'), updateRestaurantCategory);
-router.delete("/restaurant-categories/:id", protect, admin, deleteRestaurantCategory);
-
-router.post("/unit", protect, admin, addUnit);
+router.delete("/restaurant-categories/:id", protect, admin, deleteRestaurantCategory); router.post("/unit", protect, admin, addUnit);
 router.get("/unit", protect, admin, getAllUnits);
 router.get("/unit/:id", protect, admin, getUnitById);
 router.put("/unit/:id", protect, admin, updateUnit);
@@ -310,6 +308,12 @@ router.put(
   protect,
   admin,
   adminController.setProductDiscount
+);
+router.put(
+  "/products/:id/commission",
+  protect,
+  admin,
+  adminController.setProductCommission
 );
 
 router.put(

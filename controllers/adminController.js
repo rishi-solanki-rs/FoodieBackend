@@ -36,6 +36,13 @@ const normalizeNamedList = (list) => {
     return item;
   });
 };
+const normalizeCommissionPercent = (value) => {
+  if (value === undefined || value === null || value === "") return null;
+  const num = Number(value);
+  if (!Number.isFinite(num)) return null;
+  return Math.max(0, Math.min(100, num));
+};
+
 exports.getDashboard = async (req, res) => {
   try {
     const totalOrders = await Order.countDocuments({});
@@ -255,7 +262,7 @@ exports.getRestaurantMenuAdmin = async (req, res) => {
       filter.pendingUpdate = { $exists: false };
     }
     const products = await Product.find(filter)
-      .select("_id name description basePrice isApproved approvalNotes approvedAt pendingUpdate pendingUpdateAt restaurant category available isVeg image seasonal seasonTag variations addOns createdAt quantity hsnCode gstPercent")
+      .select("_id name description basePrice isApproved approvalNotes approvedAt pendingUpdate pendingUpdateAt restaurant category available isVeg image seasonal seasonTag variations addOns createdAt quantity hsnCode gstPercent adminCommissionPercent")
       .populate('category', 'name description image isActive')
       .sort({ createdAt: -1 })
       .lean();
@@ -267,9 +274,20 @@ exports.getRestaurantMenuAdmin = async (req, res) => {
 exports.approveRestaurantMenu = async (req, res) => {
   try {
     const targetId = req.params.id;
-    const { approved = true, notes } = req.body;
+    const { approved = true, notes, commissionPercent, itemCommissions } = req.body;
     const approvalState =
       typeof approved === "string" ? approved === "true" || approved === "1" : !!approved;
+    const defaultCommissionPercent = normalizeCommissionPercent(commissionPercent);
+    const commissionMap = itemCommissions && typeof itemCommissions === "object" ? itemCommissions : {};
+
+    const resolveCommissionPercent = (productId, existingPercent, fallbackPercent) => {
+      const specific = normalizeCommissionPercent(commissionMap[String(productId)]);
+      if (specific !== null) return specific;
+      if (defaultCommissionPercent !== null) return defaultCommissionPercent;
+      const current = normalizeCommissionPercent(existingPercent);
+      if (current !== null) return current;
+      return normalizeCommissionPercent(fallbackPercent) ?? 0;
+    };
     const product = await Product.findById(targetId);
     if (product) {
       if (product.pendingUpdate) {
@@ -317,6 +335,11 @@ exports.approveRestaurantMenu = async (req, res) => {
           }
           product.isApproved = true;
           product.approvedAt = new Date();
+          product.adminCommissionPercent = resolveCommissionPercent(
+            product._id,
+            product.adminCommissionPercent,
+            null
+          );
         }
         product.pendingUpdate = undefined;
         product.pendingUpdateAt = undefined;
@@ -325,6 +348,13 @@ exports.approveRestaurantMenu = async (req, res) => {
         product.isApproved = approvalState;
         product.approvalNotes = notes || product.approvalNotes;
         product.approvedAt = approvalState ? new Date() : undefined;
+        if (approvalState) {
+          product.adminCommissionPercent = resolveCommissionPercent(
+            product._id,
+            product.adminCommissionPercent,
+            null
+          );
+        }
       }
       if (approvalState) {
         const nameResult = ensureNameEn(product.name, null);
@@ -396,6 +426,11 @@ exports.approveRestaurantMenu = async (req, res) => {
           }
           item.isApproved = true;
           item.approvedAt = new Date();
+          item.adminCommissionPercent = resolveCommissionPercent(
+            item._id,
+            item.adminCommissionPercent,
+            restaurant.adminCommission
+          );
         }
         if (approvalState) {
           const nameResult = ensureNameEn(item.name, null);
@@ -422,6 +457,11 @@ exports.approveRestaurantMenu = async (req, res) => {
         item.isApproved = true;
         item.approvedAt = new Date();
         item.approvalNotes = notes || item.approvalNotes;
+        item.adminCommissionPercent = resolveCommissionPercent(
+          item._id,
+          item.adminCommissionPercent,
+          restaurant.adminCommission
+        );
         await item.save();
         modifiedCount += 1;
       } else if (!item.isApproved && !approvalState && notes) {
@@ -445,9 +485,10 @@ exports.approveRestaurantMenu = async (req, res) => {
 exports.approveProduct = async (req, res) => {
   try {
     const productId = req.params.id;
-    const { approved = true, notes } = req.body;
+    const { approved = true, notes, commissionPercent } = req.body;
     const approvalState =
       typeof approved === "string" ? approved === "true" || approved === "1" : !!approved;
+    const normalizedCommission = normalizeCommissionPercent(commissionPercent);
     const product = await Product.findById(productId);
     if (!product) return res.status(404).json({ message: "Product not found" });
     if (product.pendingUpdate) {
@@ -473,6 +514,12 @@ exports.approveProduct = async (req, res) => {
         }
         product.isApproved = true;
         product.approvedAt = new Date();
+        if (normalizedCommission !== null) {
+          product.adminCommissionPercent = normalizedCommission;
+        } else if (product.adminCommissionPercent === null || product.adminCommissionPercent === undefined) {
+          const restaurant = await Restaurant.findById(product.restaurant).select('adminCommission').lean();
+          product.adminCommissionPercent = normalizeCommissionPercent(restaurant?.adminCommission) ?? 0;
+        }
       }
       product.pendingUpdate = undefined;
       product.pendingUpdateAt = undefined;
@@ -481,6 +528,14 @@ exports.approveProduct = async (req, res) => {
       product.isApproved = approvalState;
       product.approvalNotes = notes || product.approvalNotes;
       product.approvedAt = approvalState ? new Date() : undefined;
+      if (approvalState) {
+        if (normalizedCommission !== null) {
+          product.adminCommissionPercent = normalizedCommission;
+        } else if (product.adminCommissionPercent === null || product.adminCommissionPercent === undefined) {
+          const restaurant = await Restaurant.findById(product.restaurant).select('adminCommission').lean();
+          product.adminCommissionPercent = normalizeCommissionPercent(restaurant?.adminCommission) ?? 0;
+        }
+      }
     }
     if (approvalState) {
       const nameResult = ensureNameEn(product.name, null);
@@ -566,6 +621,40 @@ exports.setProductDiscount = async (req, res) => {
       productId: product._id,
       productName: product.name?.en || product.name,
       discount: product.discount,
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+/**
+ * PUT /api/admin/products/:id/commission
+ * Admin only — set commission percent on a specific product.
+ * Body: { commissionPercent: number }
+ */
+exports.setProductCommission = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { commissionPercent } = req.body;
+
+    const normalized = normalizeCommissionPercent(commissionPercent);
+    if (normalized === null) {
+      return res.status(400).json({ success: false, message: "commissionPercent must be a number between 0 and 100" });
+    }
+
+    const product = await Product.findById(id);
+    if (!product) {
+      return res.status(404).json({ success: false, message: "Product not found" });
+    }
+
+    product.adminCommissionPercent = normalized;
+    await product.save();
+
+    return res.status(200).json({
+      success: true,
+      message: "Product commission updated",
+      productId: product._id,
+      adminCommissionPercent: product.adminCommissionPercent,
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -1508,7 +1597,7 @@ exports.getRiderTransactions = async (req, res) => {
     const filter = {
       type: { $in: riderTypes } // Only rider transaction types
     };
-    
+
     if (riderId) filter.rider = riderId;
     if (type) filter.type = type; // Override with specific type if provided
     if (status) filter.status = status;

@@ -266,8 +266,39 @@ exports.placeOrder = async (req, res) => {
     const initialStatusDesc = isOnlineOrder
       ? "Waiting for payment to be completed via Razorpay."
       : "Your order has been placed";
-    const commissionRate = restaurant.adminCommission || 0;
-    const adminCommission = Math.round(totalBeforeTip * (commissionRate / 100) * 100) / 100;
+    const productIds = cart.items.map((item) => item?.product).filter(Boolean);
+    const products = await Product.find({ _id: { $in: productIds } })
+      .select('_id adminCommissionPercent')
+      .lean();
+    const productCommissionMap = new Map(
+      products.map((p) => [p._id.toString(), Number.isFinite(Number(p.adminCommissionPercent)) ? Number(p.adminCommissionPercent) : null])
+    );
+
+    let adminCommission = 0;
+    const orderItems = cart.items.map((item) => {
+      const lineTotal = (Number(item.price) || 0) * (Number(item.quantity) || 0);
+      const productCommission = productCommissionMap.get(String(item.product));
+      const commissionPercent = Number.isFinite(productCommission)
+        ? productCommission
+        : (Number(restaurant.adminCommission) || 0);
+      const itemAdminCommission = Math.round(lineTotal * (commissionPercent / 100) * 100) / 100;
+      const itemRestaurantEarning = Math.round((lineTotal - itemAdminCommission) * 100) / 100;
+      adminCommission += itemAdminCommission;
+
+      return {
+        product: item.product,
+        name: item.name,
+        quantity: item.quantity,
+        price: item.price,
+        commissionPercent,
+        adminCommissionAmount: itemAdminCommission,
+        restaurantEarningAmount: itemRestaurantEarning,
+        variation: item.variation ? { name: item.variation.name, price: item.variation.price } : undefined,
+        addOns: item.addOns,
+        restaurant: restaurantId
+      };
+    });
+    adminCommission = Math.round(adminCommission * 100) / 100;
     const restaurantCommission = Math.round((totalBeforeTip - adminCommission - bill.deliveryFee) * 100) / 100;
     const riderCommission = bill.deliveryFee * 0.7;
     // Rider incentive: % of item subtotal (product rates only, before GST/fees)
@@ -286,15 +317,7 @@ exports.placeOrder = async (req, res) => {
       pickupOtpExpiresAt: new Date(Date.now() + otpExpiry),
       deliveryOtp,
       deliveryOtpExpiresAt: new Date(Date.now() + otpExpiry),
-      items: cart.items.map((item) => ({
-        product: item.product,
-        name: item.name,
-        quantity: item.quantity,
-        price: item.price,
-        variation: item.variation ? { name: item.variation.name, price: item.variation.price } : undefined,
-        addOns: item.addOns,
-        restaurant: restaurantId
-      })),
+      items: orderItems,
       itemTotal: bill.itemTotal,
       tax: bill.tax,
       deliveryFee: bill.deliveryFee,
@@ -1911,27 +1934,55 @@ exports.getAllOrdersAdmin = async (req, res) => {
   try {
     const { page, limit, skip } = getPaginationParams(req, 50);
     const { status, date, orderId, rider, restaurant, restaurantId } = req.query;
+    const search = req.query.search ? req.query.search.trim() : null;
     let query = {};
+
     if (status && status !== "all") query.status = status;
     if (orderId) query._id = orderId;
     if (rider) query.rider = rider;
     if (restaurant) query.restaurant = restaurant;
     if (restaurantId) query.restaurant = restaurantId;
+
     if (date) {
       const start = new Date(date);
       const end = new Date(date);
       end.setHours(23, 59, 59, 999);
       query.createdAt = { $gte: start, $lte: end };
     }
+
+    // Handle search by customer name, mobile, or order ID
+    if (search) {
+      const users = await User.find({
+        $or: [
+          { name: { $regex: search, $options: 'i' } },
+          { mobile: { $regex: search, $options: 'i' } }
+        ]
+      }).select('_id');
+      const userIds = users.map(u => u._id);
+      const searchConditions = [];
+      if (userIds.length > 0) {
+        searchConditions.push({ customer: { $in: userIds } });
+      }
+      // Only add ObjectId condition if it's a valid 24-char hex ID
+      if (mongoose.Types.ObjectId.isValid(search) && search.length === 24) {
+        searchConditions.push({ _id: search });
+      }
+      // Only apply $or if we have at least one condition
+      if (searchConditions.length > 0) {
+        query.$or = searchConditions;
+      }
+    }
+
     const total = await Order.countDocuments(query);
     const orders = await Order.find(query)
       .populate("customer", "name email mobile")
       .populate("restaurant", "name address contactNumber")
-      .populate("rider", "user") // See who is assigned
+      .populate("rider", "user")
       .populate("rider.user", "name mobile profilePic")
       .skip(skip)
       .limit(limit)
-      .sort({ createdAt: -1 }); // Newest first
+      .sort({ createdAt: -1 });
+
     res.status(200).json({
       orders,
       total,

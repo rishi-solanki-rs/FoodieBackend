@@ -35,6 +35,15 @@ const productSchema = new mongoose.Schema(
     // e.g. "2106" for food preparations, "0901" for coffee
     hsnCode: { type: String, trim: true, default: '' },
 
+    // Admin-set commission percent for this specific menu item.
+    // If null/undefined, order flow falls back to restaurant-level adminCommission.
+    adminCommissionPercent: {
+      type: Number,
+      min: 0,
+      max: 100,
+      default: null,
+    },
+
     // GST slab — set by restaurant when listing (0 / 5 / 12 / 18 %)
     gstPercent: {
       type: Number,
@@ -132,4 +141,3 @@ const productSchema = new mongoose.Schema(
 );
 
 module.exports = mongoose.model("Product", productSchema);
-
