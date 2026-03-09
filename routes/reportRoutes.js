@@ -7,6 +7,7 @@ const {
     getTopUsersReport,
     getWalletReport,
     getProfitLossReport,
+    getAdminSettlementReport,
     exportReport
 } = require('../controllers/reportController');
 const router = express.Router();
@@ -18,5 +19,6 @@ router.get('/orders', getOrderReport);
 router.get('/top-users', getTopUsersReport);
 router.get('/wallet', getWalletReport);
 router.get('/profit-loss', getProfitLossReport);
+router.get('/admin-settlement', getAdminSettlementReport);
 router.get('/export/:reportType', exportReport);
 module.exports = router;

@@ -65,8 +65,10 @@ router.post("/onboard", protect, rider, upload.fields([
   { name: 'licenseBackImage', maxCount: 1 },
   { name: 'rcImage', maxCount: 1 },
   { name: 'insuranceImage', maxCount: 1 },
+  { name: 'panCardImage', maxCount: 1 },
+  { name: 'aadharCardImage', maxCount: 1 },
   { name: 'medicalCertificate', maxCount: 1 },
-  { name: 'gst', maxCount: 1 }
+  { name: 'policyVerification', maxCount: 1 }
 ]), onboardRider);
 router.patch("/status", protect, rider, toggleStatus);
 router.patch("/break", protect, rider, toggleBreak);
@@ -100,8 +102,10 @@ router.put('/documents', protect, rider, upload.fields([
   { name: 'licenseBackImage', maxCount: 1 },
   { name: 'rcImage', maxCount: 1 },
   { name: 'insuranceImage', maxCount: 1 },
+  { name: 'panCardImage', maxCount: 1 },
+  { name: 'aadharCardImage', maxCount: 1 },
   { name: 'medicalCertificate', maxCount: 1 },
-  { name: 'gst', maxCount: 1 }
+  { name: 'policyVerification', maxCount: 1 }
 ]), updateDocuments);
 router.put('/vehicle', protect, rider, updateVehicle);
 router.put('/bank', protect, rider, updateRiderBankDetails);
@@ -111,8 +115,10 @@ router.post("/admin/create", protect, admin, upload.fields([
   { name: 'licenseBackImage', maxCount: 1 },
   { name: 'rcImage', maxCount: 1 },
   { name: 'insuranceImage', maxCount: 1 },
+  { name: 'panCardImage', maxCount: 1 },
+  { name: 'aadharCardImage', maxCount: 1 },
   { name: 'medicalCertificate', maxCount: 1 },
-  { name: 'gst', maxCount: 1 }
+  { name: 'policyVerification', maxCount: 1 }
 ]), createRiderByAdmin);
 router.get("/admin/all", protect, admin, getAllRiders);
 router.get("/admin/pending", protect, admin, getPendingRiders);
@@ -125,8 +131,10 @@ router.put("/admin/update/:id", protect, admin, upload.fields([
   { name: 'licenseBackImage', maxCount: 1 },
   { name: 'rcImage', maxCount: 1 },
   { name: 'insuranceImage', maxCount: 1 },
+  { name: 'panCardImage', maxCount: 1 },
+  { name: 'aadharCardImage', maxCount: 1 },
   { name: 'medicalCertificate', maxCount: 1 },
-  { name: 'gst', maxCount: 1 }
+  { name: 'policyVerification', maxCount: 1 }
 ]),updateRiderByAdmin);
 router.put("/admin/verify/:id", protect, admin, verifyRider);
 router.put("/admin/reject/:id", protect, admin, rejectRider);

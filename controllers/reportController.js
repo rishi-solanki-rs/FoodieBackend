@@ -209,6 +209,17 @@ exports.getOrderReport = async (req, res) => {
                 restaurantEarning: order.restaurantCommission || 0,
                 driverCommission: getRiderEarning(order),
                 tip: order.tip || 0,
+                paymentBreakdown: {
+                    itemTotal: order.paymentBreakdown?.itemTotal ?? order.itemTotal ?? 0,
+                    restaurantDiscount: order.paymentBreakdown?.restaurantDiscount ?? 0,
+                    gstOnFood: order.paymentBreakdown?.gstOnFood ?? order.tax ?? 0,
+                    packagingCharge: order.paymentBreakdown?.packagingCharge ?? order.packaging ?? 0,
+                    packagingGST: order.paymentBreakdown?.packagingGST ?? 0,
+                    restaurantBillTotal: order.paymentBreakdown?.restaurantBillTotal ?? 0,
+                    foodierDiscount: order.paymentBreakdown?.foodierDiscount ?? order.discount ?? 0,
+                    gstOnDiscount: order.paymentBreakdown?.gstOnDiscount ?? 0,
+                    finalPayableToRestaurant: order.paymentBreakdown?.finalPayableToRestaurant ?? order.restaurantCommission ?? 0,
+                },
                 status: order.status,
                 paymentMethod: order.paymentMethod,
                 paymentStatus: order.paymentStatus
@@ -360,6 +371,102 @@ exports.getProfitLossReport = async (req, res) => {
         res.status(500).json({ message: error.message });
     }
 };
+
+exports.getAdminSettlementReport = async (req, res) => {
+    try {
+        const { page, limit, skip } = getPaginationParams(req, 20);
+        const { startDate, endDate, restaurantId, status = 'delivered', format = 'json' } = req.query;
+
+        const query = {};
+        if (status) query.status = status;
+        if (restaurantId) query.restaurant = restaurantId;
+        if (startDate || endDate) {
+            query.createdAt = {};
+            if (startDate) query.createdAt.$gte = new Date(startDate);
+            if (endDate) query.createdAt.$lte = new Date(endDate);
+        }
+
+        const total = await Order.countDocuments(query);
+        const orders = await Order.find(query)
+            .populate('restaurant', 'name')
+            .populate('customer', 'name mobile')
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limit)
+            .lean();
+
+        const rows = orders.map((order) => {
+            const pb = order.paymentBreakdown || {};
+            return {
+                _id: order._id,
+                orderId: order._id.toString().slice(-8).toUpperCase(),
+                createdAt: order.createdAt,
+                status: order.status,
+                restaurant: order.restaurant?.name || 'N/A',
+                customerName: order.customer?.name || 'N/A',
+                itemTotal: pb.itemTotal ?? order.itemTotal ?? 0,
+                restaurantDiscount: pb.restaurantDiscount ?? 0,
+                gstOnFood: pb.gstOnFood ?? order.tax ?? 0,
+                packagingCharge: pb.packagingCharge ?? order.packaging ?? 0,
+                packagingGST: pb.packagingGST ?? 0,
+                restaurantBillTotal: pb.restaurantBillTotal ?? 0,
+                foodierDiscount: pb.foodierDiscount ?? order.discount ?? 0,
+                gstOnDiscount: pb.gstOnDiscount ?? 0,
+                finalPayableToRestaurant: pb.finalPayableToRestaurant ?? order.restaurantCommission ?? 0,
+            };
+        });
+
+        const summary = rows.reduce((acc, row) => {
+            acc.itemTotal += row.itemTotal || 0;
+            acc.restaurantDiscount += row.restaurantDiscount || 0;
+            acc.gstOnFood += row.gstOnFood || 0;
+            acc.packagingCharge += row.packagingCharge || 0;
+            acc.packagingGST += row.packagingGST || 0;
+            acc.restaurantBillTotal += row.restaurantBillTotal || 0;
+            acc.foodierDiscount += row.foodierDiscount || 0;
+            acc.gstOnDiscount += row.gstOnDiscount || 0;
+            acc.finalPayableToRestaurant += row.finalPayableToRestaurant || 0;
+            return acc;
+        }, {
+            itemTotal: 0,
+            restaurantDiscount: 0,
+            gstOnFood: 0,
+            packagingCharge: 0,
+            packagingGST: 0,
+            restaurantBillTotal: 0,
+            foodierDiscount: 0,
+            gstOnDiscount: 0,
+            finalPayableToRestaurant: 0,
+        });
+
+        Object.keys(summary).forEach((key) => {
+            summary[key] = Number(summary[key].toFixed(2));
+        });
+
+        if (format === 'csv') {
+            let csv = 'orderId,createdAt,status,restaurant,customerName,itemTotal,restaurantDiscount,gstOnFood,packagingCharge,packagingGST,restaurantBillTotal,foodierDiscount,gstOnDiscount,finalPayableToRestaurant\n';
+            rows.forEach((r) => {
+                csv += `${r.orderId},${r.createdAt?.toISOString?.() || ''},${r.status || ''},"${r.restaurant}","${r.customerName}",${r.itemTotal},${r.restaurantDiscount},${r.gstOnFood},${r.packagingCharge},${r.packagingGST},${r.restaurantBillTotal},${r.foodierDiscount},${r.gstOnDiscount},${r.finalPayableToRestaurant}\n`;
+            });
+            res.header('Content-Type', 'text/csv');
+            res.header('Content-Disposition', `attachment; filename="admin-settlement-${Date.now()}.csv"`);
+            return res.send(csv);
+        }
+
+        return res.status(200).json({
+            summary,
+            reports: rows,
+            total,
+            page,
+            limit,
+            pages: Math.ceil(total / limit),
+            timestamp: new Date(),
+        });
+    } catch (error) {
+        return res.status(500).json({ message: error.message });
+    }
+};
+
 exports.exportReport = async (req, res) => {
     try {
         const { reportType } = req.params;

@@ -32,7 +32,10 @@ const {
   getAllApprovedRestaurantsForAdmin,
   getRestaurantProductById,
   getRestaurantByIdAdmin,
-  getRestaurantWalletEarnings
+  getRestaurantWalletEarnings,
+  getFrozenRestaurants,
+  unfreezeRestaurant,
+  updateRestaurantLicence
 } = require('../controllers/restaurantController');
 const {
   createOwnerPromocode,
@@ -116,7 +119,13 @@ router.get('/admin/list', protect, admin, getAllRestaurantsForAdmin);
 router.get('/admin/approvedlist', protect, admin, getAllApprovedRestaurantsForAdmin);
 router.get('/admin/listName', protect, admin, getAllRestaurantsNameForAdmin);
 router.get('/admin/list/active', protect, admin, getActiveRestaurantsForAdmin);
+router.get('/admin/frozen', protect, admin, getFrozenRestaurants);
 router.put('/admin/verify/:id', protect, admin, verifyRestaurantDocuments);
+router.post('/admin/:id/unfreeze', protect, admin, unfreezeRestaurant);
+router.put('/admin/:id/licence', protect, admin, upload.fields([
+  { name: 'licenceImage', maxCount: 1 },
+  { name: 'licenceBackImage', maxCount: 1 }
+]), updateRestaurantLicence);
 router.get('/admin/:id', protect, admin, getRestaurantByIdAdmin);
 router.get('/:id', getRestaurantById);
 router.post('/:id/favorite', protect, toggleFavorite);

@@ -35,12 +35,29 @@ const orderSchema = new mongoose.Schema(
     ],
     itemTotal: { type: Number, required: true },
     tax: { type: Number, default: 0 },
+    packaging: { type: Number, default: 0 },
     deliveryFee: { type: Number, required: true },
     platformFee: { type: Number, default: 0 },
     tip: { type: Number, default: 0 },
     discount: { type: Number, default: 0 },
     couponCode: { type: String },
     totalAmount: { type: Number, required: true },
+    paymentBreakdown: {
+      itemTotal: { type: Number, default: 0 },
+      restaurantDiscount: { type: Number, default: 0 },
+      gstOnFood: { type: Number, default: 0 },
+      packagingCharge: { type: Number, default: 0 },
+      packagingGST: { type: Number, default: 0 },
+      restaurantBillTotal: { type: Number, default: 0 },
+      foodierDiscount: { type: Number, default: 0 },
+      gstOnDiscount: { type: Number, default: 0 },
+      finalPayableToRestaurant: { type: Number, default: 0 },
+      gstPercentOnFood: { type: Number, default: 0 },
+      gstPercentOnPackaging: { type: Number, default: 0 },
+      gstPercentOnDiscount: { type: Number, default: 0 },
+      computedVersion: { type: String, default: "settlement-v1" },
+      computedAt: { type: Date, default: Date.now },
+    },
     paymentMethod: {
       type: String,
       enum: ["wallet", "online"],
@@ -99,7 +116,7 @@ const orderSchema = new mongoose.Schema(
           notifiedAt: Date,
           status: {
             type: String,
-            enum: ["sent", "opened", "accepted", "declined"],
+            enum: ["sent", "opened", "accepted", "declined","rejected"],
           },
         },
       ],
@@ -108,13 +125,50 @@ const orderSchema = new mongoose.Schema(
     estimatedDeliveryTime: { type: Date },
     pickedUpAt: { type: Date },
     deliveredAt: { type: Date },
+
+    // ════════════════════════════════════════════════════════════════════════════
+    // RIDER EARNINGS BREAKDOWN - Detailed breakdown of rider earnings per delivery
+    // Updated when order is delivered
+    // ════════════════════════════════════════════════════════════════════════════
+    riderEarnings: {
+      // COMPONENT 1: Delivery Charge - Base charge for completing the delivery
+      // Calculation: admin-configured baseEarning + distance-based bonus
+      // Example: ₹30 (base) + ₹10 (distance bonus) = ₹40
+      deliveryCharge: { type: Number, default: 0 },
+      
+      // COMPONENT 2: Platform Fee - Share of platform fee given to rider
+      // Calculation: platformFee from order × riderPlatformSharePercent (if configured)
+      // Example: ₹9 (platform fee) = credited to rider
+      platformFee: { type: Number, default: 0 },
+      
+      // COMPONENT 3: Incentive - Performance/volume bonus based on order value
+      // Calculation: (itemTotal before GST) × riderIncentivePercent
+      // Example: ₹1000 × 5% = ₹50
+      incentive: { type: Number, default: 0 },
+      
+      // TOTAL: Sum of all three components
+      // totalRiderEarning = deliveryCharge + platformFee + incentive
+      // This amount is credited to rider wallet immediately after delivery
+      totalRiderEarning: { type: Number, default: 0 },
+      
+      // Snapshot of the incentive percentage used at time of order completion
+      // Stored for audit/transparency (admin might change settings later)
+      incentivePercentAtCompletion: { type: Number, default: 0 },
+      
+      // Timestamp when earnings were calculated and credited
+      earnedAt: { type: Date }
+    },
+    
+    // Legacy fields - kept for backward compatibility
+    // Use riderEarnings.totalRiderEarning for new code
     riderEarning: { type: Number, default: 0 },
+    riderIncentive: { type: Number, default: 0 },
+    riderIncentivePercent: { type: Number, default: 0 },
+    
     adminCommission: { type: Number, default: 0 },
     restaurantCommission: { type: Number, default: 0 },
     riderCommission: { type: Number, default: 0 },
-    riderIncentive: { type: Number, default: 0 },       // % of itemTotal — admin-configured
-    riderIncentivePercent: { type: Number, default: 0 }, // snapshot of the % at time of order
-
+    
     cashCollected: { type: Number, default: 0 },
     cashCollectedAt: { type: Date },
     cashCollectedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },

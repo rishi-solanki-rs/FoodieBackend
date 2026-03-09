@@ -131,14 +131,22 @@ const calculateBill = async (
     const coupon = pricingResult.coupon;
     return {
       itemTotal: breakdown.itemTotal,
+      restaurantDiscount: breakdown.restaurantDiscount || 0,
+      gstOnFood: breakdown.gstOnFood || 0,
       tax: breakdown.tax,
       packaging: breakdown.packaging,
+      packagingGST: breakdown.packagingGST || 0,
+      restaurantBillTotal: breakdown.restaurantBillTotal || 0,
       deliveryFee: breakdown.deliveryFee,
       platformFee: breakdown.platformFee,
       smallCartFee: breakdown.smallCartFee,
       surgeFee: breakdown.surgeFee,
       surgeMultiplier: breakdown.surgeMultiplier,
       discount: breakdown.discount,
+      foodierDiscount: breakdown.foodierDiscount || breakdown.discount || 0,
+      gstOnDiscount: breakdown.gstOnDiscount || 0,
+      finalPayableToRestaurant: breakdown.finalPayableToRestaurant || 0,
+      paymentBreakdown: breakdown.paymentBreakdown || null,
       toPay: breakdown.totalAmount,
       totalBeforeTip: Math.max(0, breakdown.totalAmount - breakdown.tip),
       tip: breakdown.tip,
@@ -299,7 +307,10 @@ exports.placeOrder = async (req, res) => {
       };
     });
     adminCommission = Math.round(adminCommission * 100) / 100;
-    const restaurantCommission = Math.round((totalBeforeTip - adminCommission - bill.deliveryFee) * 100) / 100;
+    const settlementRestaurantPayable = Number(bill.paymentBreakdown?.finalPayableToRestaurant);
+    const restaurantCommission = Number.isFinite(settlementRestaurantPayable)
+      ? Math.round(settlementRestaurantPayable * 100) / 100
+      : Math.round((totalBeforeTip - adminCommission - bill.deliveryFee) * 100) / 100;
     const riderCommission = bill.deliveryFee * 0.7;
     // Rider incentive: % of item subtotal (product rates only, before GST/fees)
     const adminSettings = await AdminSetting.findOne().lean();
@@ -320,12 +331,26 @@ exports.placeOrder = async (req, res) => {
       items: orderItems,
       itemTotal: bill.itemTotal,
       tax: bill.tax,
+      packaging: bill.packaging,
       deliveryFee: bill.deliveryFee,
       platformFee: bill.platformFee,
       tip: tipAmount,
       discount: bill.discount,
       couponCode: bill.appliedCoupon,
       totalAmount: bill.toPay,
+      paymentBreakdown: bill.paymentBreakdown || {
+        itemTotal: bill.itemTotal,
+        restaurantDiscount: bill.restaurantDiscount || 0,
+        gstOnFood: bill.gstOnFood || 0,
+        packagingCharge: bill.packaging || 0,
+        packagingGST: bill.packagingGST || 0,
+        restaurantBillTotal: bill.restaurantBillTotal || 0,
+        foodierDiscount: bill.foodierDiscount || bill.discount || 0,
+        gstOnDiscount: bill.gstOnDiscount || 0,
+        finalPayableToRestaurant: bill.finalPayableToRestaurant || 0,
+        computedVersion: "settlement-v1",
+        computedAt: new Date(),
+      },
       adminCommission,
       restaurantCommission,
       riderCommission,

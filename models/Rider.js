@@ -36,24 +36,73 @@ const riderSchema = new mongoose.Schema({
         }
     },
     documents: {
+        // Driving License - REQUIRED & EXPIRES
         license: {
             frontImage: { type: String },
             backImage: { type: String },
-            number: String
+            number: { type: String },
+            expiryDate: { type: Date }, // License expiry date - CRITICAL for verification
+            verifiedAt: { type: Date },
+            verifiedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
         },
+        // Registration Certificate - REQUIRED & EXPIRES
         rc: {
             number: { type: String },
             image: { type: String },
-            expiryDate: { type: Date }
+            expiryDate: { type: Date }, // RC expiry date - vehicle registration validity
+            verifiedAt: { type: Date },
+            verifiedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
         },
+        // Insurance - REQUIRED & EXPIRES
         insurance: {
             number: { type: String },
             image: { type: String },
-            expiryDate: { type: Date }
+            expiryDate: { type: Date }, // Insurance expiry - vehicle insurance validity
+            verifiedAt: { type: Date },
+            verifiedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
         },
-        medicalCertificate: { type: String },
-        gst: { type: String }
+        // PAN Card - FOR INCOME TAX & BANKING
+        panCard: {
+            number: { type: String },
+            image: { type: String },
+            verifiedAt: { type: Date },
+            verifiedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
+        },
+        // Aadhar Card - IDENTIFICATION PROOF
+        aadharCard: {
+            number: { type: String },
+            image: { type: String },
+            verifiedAt: { type: Date },
+            verifiedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
+        },
+        // Medical Certificate - HEALTH VERIFICATION
+        medicalCertificate: { 
+            image: { type: String },
+            expiryDate: { type: Date }, // Medical certificate validity period
+            verifiedAt: { type: Date },
+            verifiedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
+        },
+        // Policy Verification - INSURANCE POLICY
+        policyVerification: {
+            image: { type: String },
+            expiryDate: { type: Date }, // Policy expiry date
+            verifiedAt: { type: Date },
+            verifiedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
+        }
     },
+    permanentAddress: {
+        street: String,
+        city: String,
+        state: String,
+        zipCode: String
+    },
+    localAddress: {
+        street: String,
+        city: String,
+        state: String,
+        zipCode: String
+    },
+    emergencyContactNumber: { type: String },
     bankDetails: {
         accountName: { type: String },
         accountNumber: { type: String },
@@ -95,6 +144,20 @@ const riderSchema = new mongoose.Schema({
     rejectionReason: { type: String },
     rejectionDate: { type: Date },
     rejectedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    // Document Expiry Tracking - for admin alerts
+    documentsExpiryStatus: {
+        licenseExpiring: { type: Boolean, default: false }, // Expires within 30 days
+        licenseExpired: { type: Boolean, default: false },   // Has expired
+        rcExpiring: { type: Boolean, default: false },       // Expires within 30 days
+        rcExpired: { type: Boolean, default: false },        // Has expired
+        insuranceExpiring: { type: Boolean, default: false }, // Expires within 30 days
+        insuranceExpired: { type: Boolean, default: false },  // Has expired
+        medicalExpiring: { type: Boolean, default: false },   // Expires within 30 days
+        medicalExpired: { type: Boolean, default: false },    // Has expired
+        policyExpiring: { type: Boolean, default: false },    // Expires within 30 days
+        policyExpired: { type: Boolean, default: false },     // Has expired
+        lastCheckedAt: { type: Date }                         // When expiry was last checked
+    },
     currentLocation: {
         type: { type: String, default: 'Point' },
         coordinates: { type: [Number], default: [0, 0], index: '2dsphere' } 

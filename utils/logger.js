@@ -141,6 +141,17 @@ const logSecurity = (userId, event, severity, details) => {
     timestamp: new Date().toISOString()
   });
 };
+const logRiderAction = (orderId, riderId, action, reason = null) => {
+  logger.info('Rider action', {
+    event: 'RIDER_ACTION',
+    orderId,
+    riderId,
+    action, // 'accepted' or 'rejected'
+    reason,
+    timestamp: new Date().toISOString()
+  });
+};
+
 module.exports = {
   logger,
   logOrderTransition,
@@ -149,6 +160,7 @@ module.exports = {
   logRiderAssignment,
   logOTP,
   logRestaurantAction,
+  logRiderAction,
   logAuth,
   logWalletTransaction,
   logCouponUsage,

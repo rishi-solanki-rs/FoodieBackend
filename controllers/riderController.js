@@ -23,6 +23,16 @@ const sendError = (res, status, message, details) => {
   });
 };
 const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
+
+const parseIfString = (value) => {
+  if (typeof value !== "string") return value;
+  try {
+    return JSON.parse(value);
+  } catch (error) {
+    return value;
+  }
+};
+
 const getAverageRating = (rating) => {
   if (typeof rating === "number") return rating;
   if (rating && typeof rating === "object" && typeof rating.average === "number") {
@@ -51,7 +61,8 @@ const generateRiderToken = (res, user) => {
 };
 exports.updateRiderProfile = async (req, res) => {
   try {
-    const { name, email, mobile } = req.body;
+    let { name, email, mobile, address, workCity, workZone, language, fcmToken } = req.body;
+
     if (!req.user || !isValidObjectId(req.user._id)) {
       return sendError(res, 401, "Unauthorized rider");
     }
@@ -59,27 +70,67 @@ exports.updateRiderProfile = async (req, res) => {
     if (!user || user.role !== "rider") {
       return sendError(res, 404, "Rider user not found");
     }
+
+    const rider = await Rider.findOne({ user: req.user._id });
+    if (!rider) {
+      return sendError(res, 404, "Rider profile not found");
+    }
+
     if (!user.name && (!name || !name.trim())) {
       return sendError(res, 400, "Name is required");
     }
     if (typeof name === "string" && name.trim()) {
       user.name = name.trim();
     }
+
     if (email !== undefined || mobile !== undefined) {
       return sendError(res, 400, "Email/Mobile updates require OTP verification. Use /profile/request-update endpoint");
     }
+
     if (req.file) {
       user.profilePic = getFileUrl(req.file);
     }
+
+    if (language !== undefined) {
+      user.language = language;
+    }
+    if (fcmToken !== undefined) {
+      user.fcmToken = fcmToken;
+    }
+
+    if (address !== undefined) {
+      if (typeof address === 'string') {
+        try {
+          address = JSON.parse(address);
+        } catch (e) {
+          return sendError(res, 400, "Invalid address format");
+        }
+      }
+      rider.address = { ...(rider.address || {}), ...address };
+    }
+    if (workCity !== undefined) rider.workCity = workCity;
+    if (workZone !== undefined) rider.workZone = workZone;
+
     await user.save();
+    await rider.save();
+
     res.status(200).json({
       success: true,
-      message: "Basic profile updated",
+      message: "Profile updated successfully",
       user: {
         _id: user._id,
         name: user.name,
         email: user.email,
-        mobile: user.mobile
+        mobile: user.mobile,
+        profilePic: user.profilePic,
+        language: user.language
+      },
+      rider: {
+        _id: rider._id,
+        address: rider.address,
+        workCity: rider.workCity,
+        workZone: rider.workZone,
+        verificationStatus: rider.verificationStatus
       }
     });
   } catch (e) {
@@ -471,10 +522,22 @@ exports.onboardRider = async (req, res) => {
       if (req.files.medicalCertificate && req.files.medicalCertificate[0]) {
         processedDocuments.medicalCertificate = getFileUrl(req.files.medicalCertificate[0]);
       }
-      if (req.files.gst && req.files.gst[0]) {
-        processedDocuments.gst = getFileUrl(req.files.gst[0]);
+      if (req.files.panCardImage && req.files.panCardImage[0]) {
+        processedDocuments.panCard = processedDocuments.panCard || {};
+        processedDocuments.panCard.image = getFileUrl(req.files.panCardImage[0]);
+      }
+      if (req.files.aadharCardImage && req.files.aadharCardImage[0]) {
+        processedDocuments.aadharCard = processedDocuments.aadharCard || {};
+        processedDocuments.aadharCard.image = getFileUrl(req.files.aadharCardImage[0]);
+      }
+      if (req.files.policyVerification && req.files.policyVerification[0]) {
+        processedDocuments.policyVerification = processedDocuments.policyVerification || {};
+        processedDocuments.policyVerification.image = getFileUrl(req.files.policyVerification[0]);
       }
     }
+    const permanentAddress = parseIfString(req.body.permanentAddress) || {};
+    const localAddress = parseIfString(req.body.localAddress) || {};
+    const emergencyContactNumber = req.body.emergencyContactNumber || "";
     const riderPayload = {
       user: user._id,
       address,
@@ -483,6 +546,9 @@ exports.onboardRider = async (req, res) => {
       vehicle,
       documents: processedDocuments,
       bankDetails,
+      permanentAddress,
+      localAddress,
+      emergencyContactNumber,
       currentLocation: location || undefined,
       verificationStatus: "pending",
       riderVerified: false,
@@ -908,7 +974,7 @@ exports.clearSOS = async (req, res) => {
 };
 exports.updateDocuments = async (req, res) => {
   try {
-    let { documents } = req.body;
+    let { documents, permanentAddress, localAddress, emergencyContactNumber } = req.body;
     if (typeof documents === 'string') documents = JSON.parse(documents);
     const rider = await Rider.findOne({ user: req.user._id });
     if (!rider) return res.status(404).json({ message: 'Rider profile not found' });
@@ -933,11 +999,23 @@ exports.updateDocuments = async (req, res) => {
       if (req.files.medicalCertificate && req.files.medicalCertificate[0]) {
         updatedDocuments.medicalCertificate = getFileUrl(req.files.medicalCertificate[0]);
       }
-      if (req.files.gst && req.files.gst[0]) {
-        updatedDocuments.gst = getFileUrl(req.files.gst[0]);
+      if (req.files.panCardImage && req.files.panCardImage[0]) {
+        updatedDocuments.panCard = updatedDocuments.panCard || {};
+        updatedDocuments.panCard.image = getFileUrl(req.files.panCardImage[0]);
+      }
+      if (req.files.aadharCardImage && req.files.aadharCardImage[0]) {
+        updatedDocuments.aadharCard = updatedDocuments.aadharCard || {};
+        updatedDocuments.aadharCard.image = getFileUrl(req.files.aadharCardImage[0]);
+      }
+      if (req.files.policyVerification && req.files.policyVerification[0]) {
+        updatedDocuments.policyVerification = updatedDocuments.policyVerification || {};
+        updatedDocuments.policyVerification.image = getFileUrl(req.files.policyVerification[0]);
       }
     }
     rider.documents = updatedDocuments;
+    if (permanentAddress) rider.permanentAddress = parseIfString(permanentAddress);
+    if (localAddress) rider.localAddress = parseIfString(localAddress);
+    if (emergencyContactNumber) rider.emergencyContactNumber = emergencyContactNumber;
     rider.verificationStatus = 'pending';
     rider.riderVerified = false;
     await rider.save();
@@ -1207,12 +1285,15 @@ exports.createRiderByAdmin = async (req, res) => {
   try {
     let {
       name, email, mobile, password,
-      address, workCity, workZone, vehicle, documents, bankDetails
+      address, workCity, workZone, vehicle, documents, bankDetails,
+      permanentAddress, localAddress, emergencyContactNumber
     } = req.body;
     if (typeof address === 'string') address = JSON.parse(address);
     if (typeof vehicle === 'string') vehicle = JSON.parse(vehicle);
     if (typeof documents === 'string') documents = JSON.parse(documents);
     if (typeof bankDetails === 'string') bankDetails = JSON.parse(bankDetails);
+    if (typeof permanentAddress === 'string') permanentAddress = JSON.parse(permanentAddress);
+    if (typeof localAddress === 'string') localAddress = JSON.parse(localAddress);
     const userExists = await User.findOne({ $or: [{ email }, { mobile }] });
     if (userExists) {
       throw new Error('User with this email or mobile already exists');
@@ -1258,10 +1339,20 @@ exports.createRiderByAdmin = async (req, res) => {
       if (req.files.medicalCertificate && req.files.medicalCertificate[0]) {
         processedDocuments.medicalCertificate = getFileUrl(req.files.medicalCertificate[0]);
       }
-      if (req.files.gst && req.files.gst[0]) {
-        processedDocuments.gst = getFileUrl(req.files.gst[0]);
+      if (req.files.panCardImage && req.files.panCardImage[0]) {
+        processedDocuments.panCard = processedDocuments.panCard || {};
+        processedDocuments.panCard.image = getFileUrl(req.files.panCardImage[0]);
+      }
+      if (req.files.aadharCardImage && req.files.aadharCardImage[0]) {
+        processedDocuments.aadharCard = processedDocuments.aadharCard || {};
+        processedDocuments.aadharCard.image = getFileUrl(req.files.aadharCardImage[0]);
+      }
+      if (req.files.policyVerification && req.files.policyVerification[0]) {
+        processedDocuments.policyVerification = processedDocuments.policyVerification || {};
+        processedDocuments.policyVerification.image = getFileUrl(req.files.policyVerification[0]);
       }
     }
+    
     const [newRider] = await Rider.create([{
       user: newUser._id,
       address,
@@ -1270,6 +1361,9 @@ exports.createRiderByAdmin = async (req, res) => {
       vehicle,
       documents: processedDocuments,
       bankDetails,
+      permanentAddress: permanentAddress || {},
+      localAddress: localAddress || {},
+      emergencyContactNumber: emergencyContactNumber || "",
       verificationStatus: 'approved', // Admin created = Auto Approved
       riderVerified: true,
       currentLocation: {
@@ -1566,20 +1660,90 @@ exports.getRiderDetails = async (req, res) => {
 };
 exports.updateRiderByAdmin = async (req, res) => {
   try {
-    const { address, workCity, workZone, vehicle, documents, bankDetails } = req.body;
+    let { address, workCity, workZone, vehicle, documents, bankDetails, permanentAddress, localAddress, emergencyContactNumber } = req.body;
+    
+    // Parse incoming JSON strings from FormData
+    address = parseIfString(address);
+    vehicle = parseIfString(vehicle);
+    documents = parseIfString(documents);
+    bankDetails = parseIfString(bankDetails);
+    permanentAddress = parseIfString(permanentAddress);
+    localAddress = parseIfString(localAddress);
+    
+    // Handle profile picture update for User model
+    let profilePicUrl = null;
+    if (req.files && req.files.profilePic && req.files.profilePic[0]) {
+      profilePicUrl = getFileUrl(req.files.profilePic[0]);
+    }
+    
+    // Handle file uploads for documents
+    if (req.files) {
+      if (!documents) documents = {};
+      if (req.files.licenseFrontImage && req.files.licenseFrontImage[0]) {
+        documents.license = documents.license || {};
+        documents.license.frontImage = getFileUrl(req.files.licenseFrontImage[0]);
+      }
+      if (req.files.licenseBackImage && req.files.licenseBackImage[0]) {
+        documents.license = documents.license || {};
+        documents.license.backImage = getFileUrl(req.files.licenseBackImage[0]);
+      }
+      if (req.files.rcImage && req.files.rcImage[0]) {
+        documents.rc = documents.rc || {};
+        documents.rc.image = getFileUrl(req.files.rcImage[0]);
+      }
+      if (req.files.insuranceImage && req.files.insuranceImage[0]) {
+        documents.insurance = documents.insurance || {};
+        documents.insurance.image = getFileUrl(req.files.insuranceImage[0]);
+      }
+      if (req.files.medicalCertificate && req.files.medicalCertificate[0]) {
+        documents.medicalCertificate = getFileUrl(req.files.medicalCertificate[0]);
+      }
+      if (req.files.panCardImage && req.files.panCardImage[0]) {
+        documents.panCard = documents.panCard || {};
+        documents.panCard.image = getFileUrl(req.files.panCardImage[0]);
+      }
+      if (req.files.aadharCardImage && req.files.aadharCardImage[0]) {
+        documents.aadharCard = documents.aadharCard || {};
+        documents.aadharCard.image = getFileUrl(req.files.aadharCardImage[0]);
+      }
+      if (req.files.policyVerification && req.files.policyVerification[0]) {
+        documents.policyVerification = documents.policyVerification || {};
+        documents.policyVerification.image = getFileUrl(req.files.policyVerification[0]);
+      }
+    }
+    
+    // Handle vehicle type lookup (after parsing)
     if (vehicle && vehicle.type && typeof vehicle.type === 'string') {
       const VehicleModel = require('../models/Vehicle');
       const foundVehicle = await VehicleModel.findOne({ $or: [{ name: vehicle.type }, { type: vehicle.type }] });
       if (foundVehicle) vehicle.type = foundVehicle._id;
     }
+    
+    // Build update payload
+    const updatePayload = { workCity, workZone };
+    if (address) updatePayload.address = address;
+    if (vehicle) updatePayload.vehicle = vehicle;
+    if (documents) updatePayload.documents = documents;
+    if (bankDetails) updatePayload.bankDetails = bankDetails;
+    if (permanentAddress) updatePayload.permanentAddress = permanentAddress;
+    if (localAddress) updatePayload.localAddress = localAddress;
+    if (emergencyContactNumber) updatePayload.emergencyContactNumber = emergencyContactNumber;
+    
     const updatedRider = await Rider.findByIdAndUpdate(
       req.params.id,
-      { address, workCity, workZone, vehicle, documents, bankDetails },
+      updatePayload,
       { new: true, runValidators: true }
     );
     if (!updatedRider) return res.status(404).json({ message: "Rider not found" });
+    
+    // Update User's profile picture if provided
+    if (profilePicUrl && updatedRider.user) {
+      await User.findByIdAndUpdate(updatedRider.user, { profilePic: profilePicUrl });
+    }
+    
     res.status(200).json({ message: "Rider details updated", rider: updatedRider });
   } catch (error) {
+    console.error('Update rider error:', error.message);
     res.status(500).json({ message: error.message });
   }
 };

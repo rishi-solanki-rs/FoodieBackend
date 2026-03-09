@@ -20,6 +20,7 @@ const Promocode = require('../models/Promocode');
 const Restaurant = require('../models/Restaurant');
 const Order = require('../models/Order');
 const AdminSetting = require('../models/AdminSetting');
+const { calculateSettlementBreakdown } = require('./settlementCalculator');
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -167,11 +168,27 @@ async function calculateOrderPrice({
     const discount = round(couponResult.discount);
     const finalDeliveryFee = couponResult.freeDelivery ? 0 : deliveryFee;
 
-    // 6. Grand total
-    let totalAmount = itemTotal + gstTotal + packaging + finalDeliveryFee + platformFee + smallCartFee - discount + round(tip);
+    // 6. Canonical restaurant billing + platform settlement breakdown
+    const effectiveFoodGstPercent = itemTotal > 0 ? round((gstTotal / itemTotal) * 100) : adminSettings.defaultGstPercent;
+    const packagingGstPercent = adminSettings.defaultGstPercent;
+    const discountGstPercent = adminSettings.defaultGstPercent;
+    const settlement = calculateSettlementBreakdown({
+      itemTotal,
+      restaurantDiscount: 0,
+      foodGstPercent: effectiveFoodGstPercent,
+      packagingCharge: packaging,
+      packagingGstPercent,
+      foodierDiscount: discount,
+      discountGstPercent,
+    });
+
+    const gstTotalForOrder = round(settlement.gstOnFood + settlement.packagingGST);
+
+    // 7. Grand total
+    let totalAmount = settlement.finalPayableToRestaurant + finalDeliveryFee + platformFee + smallCartFee + round(tip);
     totalAmount = round(Math.max(0, totalAmount));
 
-    // 7. Wallet deduction
+    // 8. Wallet deduction
     let walletDeduction = 0;
     let amountToPay = totalAmount;
     if (useWallet && walletBalance > 0) {
@@ -182,24 +199,31 @@ async function calculateOrderPrice({
     return {
       success: true,
       breakdown: {
-        itemTotal,
-        gst: gstTotal,
+        itemTotal: settlement.itemTotal,
+        restaurantDiscount: settlement.restaurantDiscount,
+        gstOnFood: settlement.gstOnFood,
+        gst: gstTotalForOrder,
+        tax: gstTotalForOrder,
         packaging,
+        packagingGST: settlement.packagingGST,
+        restaurantBillTotal: settlement.restaurantBillTotal,
         deliveryFee: round(finalDeliveryFee),
         platformFee,
         smallCartFee,
         discount,
+        foodierDiscount: settlement.foodierDiscount,
+        gstOnDiscount: settlement.gstOnDiscount,
+        finalPayableToRestaurant: settlement.finalPayableToRestaurant,
+        paymentBreakdown: settlement,
         tip: round(tip),
         totalAmount,
         walletDeduction,
         amountToPay,
         // Legacy fields kept for backward compatibility
-        tax: gstTotal,
         taxRate: null,
-        smallCartFee: 0,
         surgeFee: 0,
         surgeMultiplier: 1,
-        subtotal: round(itemTotal + gstTotal + packaging + finalDeliveryFee + platformFee),
+        subtotal: round(settlement.restaurantBillTotal + finalDeliveryFee + platformFee),
       },
       coupon: {
         code: couponCode || null,

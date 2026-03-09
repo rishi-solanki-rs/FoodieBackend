@@ -1,7 +1,10 @@
 const cron = require('node-cron');
 const Order = require('../models/Order');
 const User = require('../models/User');
+const Restaurant = require('../models/Restaurant');
+const Rider = require('../models/Rider');
 const socketService = require('./socketService');
+const { refreshAllRidersDocumentStatus, refreshAllRestaurantsDocumentStatus } = require('../utils/documentExpiryChecker');
 const initCronJobs = () => {
     console.log(' Initializing Cron Jobs...');
     cron.schedule('*/5 * * * *', async () => {
@@ -131,8 +134,82 @@ const initCronJobs = () => {
             } catch (error) {
                 console.error('[Cleanup Job 3] Error:', error.message);
             }
+
+            // Cleanup Job 5: Check Restaurant Licence Expiry
+            try {
+                console.log('[Cleanup Job 5] Checking for expired/expiring restaurant food licences...');
+                const today = new Date();
+                today.setHours(0, 0, 0, 0);
+
+                // Find restaurants with licence expiring today or already expired
+                const expiringRestaurants = await Restaurant.find({
+                    'documents.license.expiry': {
+                        $lte: today
+                    },
+                    isActive: true
+                });
+
+                if (expiringRestaurants.length === 0) {
+                    console.log('No restaurants with expired or expiring licences found.');
+                } else {
+                    console.log(`Found ${expiringRestaurants.length} restaurants with expired/expiring licences.`);
+                    
+                    for (const restaurant of expiringRestaurants) {
+                        const licenceExpiry = restaurant.documents?.license?.expiry;
+                        
+                        // Freeze the restaurant account
+                        restaurant.isActive = false;
+                        restaurant.frozenReason = 'Food licence expired or expiring';
+                        restaurant.frozenDate = new Date();
+                        restaurant.frozenBy = 'system';
+                        
+                        await restaurant.save();
+
+                        console.log(`✅ Frozen restaurant: ${restaurant.name} (ID: ${restaurant._id}) - Licence expiry: ${licenceExpiry?.toDateString()}`);
+
+                        // Notify admin via socket
+                        if (socketService.getIO()) {
+                            socketService.emitToAdmin('restaurant:licence_expired', {
+                                restaurantId: restaurant._id.toString(),
+                                restaurantName: restaurant.name,
+                                ownerEmail: restaurant.email,
+                                licenceNumber: restaurant.documents?.license?.number,
+                                licenceExpiry: licenceExpiry,
+                                action: 'account_frozen',
+                                message: `Food licence for ${restaurant.name} has expired or is expiring. Account has been frozen.`,
+                                timestamp: new Date()
+                            });
+                        }
+                    }
+                    
+                    console.log(`✅ Frozen ${expiringRestaurants.length} restaurants with expired/expiring licences.`);
+                }
+            } catch (error) {
+                console.error('[Cleanup Job 5] Error:', error.message);
+            }
         } catch (error) {
             console.error('Error in Cron Job:', error);
+        }
+    });
+
+    // Daily Document Expiry Status Update Job (runs at 2 AM daily)
+    cron.schedule('0 2 * * *', async () => {
+        try {
+            console.log('\n🔍 [DAILY JOB] Starting Document Expiry Status Check...');
+            
+            // Update all riders document status
+            console.log('[Daily Job] Updating all riders document expiry status...');
+            const riderResult = await refreshAllRidersDocumentStatus();
+            console.log(`✅ Riders: ${riderResult.updated} updated, ${riderResult.failed} failed`);
+
+            // Update all restaurants document status
+            console.log('[Daily Job] Updating all restaurants document expiry status...');
+            const restaurantResult = await refreshAllRestaurantsDocumentStatus();
+            console.log(`✅ Restaurants: ${restaurantResult.updated} updated, ${restaurantResult.failed} failed`);
+
+            console.log('🔍 [DAILY JOB] Document Expiry Status Check Completed\n');
+        } catch (error) {
+            console.error('[Daily Document Expiry Job] Error:', error);
         }
     });
 };

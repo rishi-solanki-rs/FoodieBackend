@@ -87,15 +87,52 @@ const restaurantSchema = new mongoose.Schema(
       routingNumber: { type: String }
     },
     documents: {
-      license: { url: String, backUrl: String, number: String, expiry: Date },
-      pan: { url: String, number: String },
-      gst: { url: String, number: String }
+      // FSSAI Food Safety License - CRITICAL & EXPIRES
+      license: { 
+        url: { type: String },
+        backUrl: { type: String },
+        number: { type: String },
+        expiry: { type: Date }, // License expiry date - customer-facing critical field
+        verifiedAt: { type: Date },
+        verifiedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
+      },
+      // PAN Card - TAX IDENTIFICATION
+      pan: { 
+        url: { type: String },
+        number: { type: String },
+        verifiedAt: { type: Date },
+        verifiedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
+      },
+      // GST Registration - TAX COMPLIANCE & EXPIRES
+      gst: { 
+        url: { type: String },
+        number: { type: String },
+        expiryDate: { type: Date }, // GST certificate validity (can be cancelled/renewed)
+        verifiedAt: { type: Date },
+        verifiedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
+      }
     },
     verificationStatus: { type: String, enum: ['pending', 'verified', 'rejected'], default: 'pending' },
     verificationNotes: { type: String },
     rejectionReason: { type: String },
     rejectionDate: { type: Date },
     rejectedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+    // Document Expiry Tracking - for admin alerts
+    documentsExpiryStatus: {
+        licenseExpiring: { type: Boolean, default: false },  // FSSAI expires within 30 days
+        licenseExpired: { type: Boolean, default: false },   // FSSAI has expired
+        gstExpiring: { type: Boolean, default: false },      // GST expires within 30 days
+        gstExpired: { type: Boolean, default: false },       // GST has expired
+        lastCheckedAt: { type: Date }                        // When expiry was last checked
+    },
+    // Account Freeze Status (for licence expiry or violations)
+    frozenReason: { type: String }, // Reason for freezing
+    frozenDate: { type: Date }, // When the account was frozen
+    frozenBy: { type: String, enum: ['system', 'admin'], default: 'admin' }, // Who froze it
+    // Account Unfreeze Status (tracking manual reactivation)
+    unfreezedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" }, // Admin who unfroze it
+    unfreezedDate: { type: Date }, // When the account was unfrozen
+    unfreezeReason: { type: String }, // Reason for unfreezing/verification passed
     pendingUpdate: {
       email: { type: String },
       contactNumber: { type: String },
@@ -115,6 +152,20 @@ const restaurantSchema = new mongoose.Schema(
       gstPercent: { type: Number, default: 0 }
     },
     estimatedPreparationTime: { type: Number, default: 15 }, // in minutes
+    autoAccept: { type: Boolean, default: false },
+    orderScheduling: { type: Boolean, default: false },
+    dailyOrderLimitType: { type: String, enum: ['unlimited', 'custom'], default: 'unlimited' },
+    dailyOrderLimit: { type: Number, default: null },
+    notificationSettings: {
+      newOrderAlert: { type: Boolean, default: true },
+      cancellationAlert: { type: Boolean, default: true },
+      foodReadyAlert: { type: Boolean, default: true },
+      orderDelayAlert: { type: Boolean, default: false },
+      riderAssignedAlert: { type: Boolean, default: true },
+      riderArrivedAlert: { type: Boolean, default: true },
+      orderPickedUpAlert: { type: Boolean, default: true },
+      promotionalAlert: { type: Boolean, default: false },
+    },
     isTemporarilyClosed: { type: Boolean, default: false },
     timing: {
       monday: dailyTimingSchema,

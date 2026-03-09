@@ -614,6 +614,11 @@ exports.updateRestaurant = async (req, res) => {
       "freeDeliveryContribution",
       "minOrderValue",
       "estimatedPreparationTime",
+      "autoAccept",
+      "orderScheduling",
+      "dailyOrderLimitType",
+      "dailyOrderLimit",
+      "notificationSettings",
       "taxConfig",
       "isTemporarilyClosed",
       "timing",
@@ -1053,6 +1058,7 @@ exports.getMyRestaurant = async (req, res) => {
         cuisine: restaurant.cuisine,
         address: restaurant.address,
         city: restaurant.city,
+        area: restaurant.area,
         location: restaurant.location,
         contactNumber: restaurant.contactNumber,
         email: restaurant.email,
@@ -1073,6 +1079,12 @@ exports.getMyRestaurant = async (req, res) => {
         isTemporarilyClosed: restaurant.isTemporarilyClosed,
         isFreeDelivery: restaurant.isFreeDelivery,
         freeDeliveryContribution: restaurant.freeDeliveryContribution,
+        estimatedPreparationTime: restaurant.estimatedPreparationTime,
+        autoAccept: restaurant.autoAccept,
+        orderScheduling: restaurant.orderScheduling,
+        dailyOrderLimitType: restaurant.dailyOrderLimitType,
+        dailyOrderLimit: restaurant.dailyOrderLimit,
+        notificationSettings: restaurant.notificationSettings,
         owner: restaurant.owner,
       },
     });
@@ -1315,6 +1327,11 @@ exports.updateSettings = async (req, res) => {
       "minOrderValue",
       "packagingCharge",
       "estimatedPreparationTime",
+      "autoAccept",
+      "orderScheduling",
+      "dailyOrderLimitType",
+      "dailyOrderLimit",
+      "notificationSettings",
       "taxConfig",
       "deliveryTime",
       "geofenceRadius",
@@ -1842,5 +1859,260 @@ exports.getRestaurantProductById = async (req, res) => {
     res.json(restaurant);
   } catch (error) {
     res.status(500).json({ message: "Server error", error });
+  }
+};
+
+// Admin endpoint to get all frozen restaurants
+exports.getFrozenRestaurants = async (req, res) => {
+  try {
+    // Verify admin authentication
+    const user = await User.findById(req.user._id);
+    if (!user || user.role !== "admin") {
+      return res.status(403).json({ message: "Unauthorized: Admin access required" });
+    }
+
+    const { page = 1, limit = 20, search = "" } = req.query;
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    // Build query for frozen restaurants
+    const query = {
+      isActive: false,
+      frozenReason: { $exists: true, $ne: null }
+    };
+
+    // Add search filter if provided
+    if (search && search.trim()) {
+      query.$or = [
+        { name: new RegExp(search, "i") },
+        { "owner.email": new RegExp(search, "i") },
+        { "owner.name": new RegExp(search, "i") },
+        { contact: new RegExp(search, "i") }
+      ];
+    }
+
+    // Get total count
+    const total = await Restaurant.countDocuments(query);
+
+    // Get frozen restaurants with pagination
+    const frozenRestaurants = await Restaurant.find(query)
+      .populate("owner", "name email")
+      .select("name owner email contact documents frozenReason frozenDate frozenBy isActive")
+      .sort({ frozenDate: -1 })
+      .skip(skip)
+      .limit(parseInt(limit))
+      .lean();
+
+    // Format response
+    const formattedData = frozenRestaurants.map(restaurant => ({
+      _id: restaurant._id,
+      name: restaurant.name,
+      email: restaurant.email,
+      contact: restaurant.contact,
+      owner: restaurant.owner,
+      frozenReason: restaurant.frozenReason,
+      frozenDate: restaurant.frozenDate,
+      frozenBy: restaurant.frozenBy,
+      licenceExpiry: restaurant.documents?.license?.expiry || null
+    }));
+
+    res.status(200).json({
+      data: formattedData,
+      pagination: {
+        current: parseInt(page),
+        limit: parseInt(limit),
+        total,
+        pages: Math.ceil(total / parseInt(limit))
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Admin endpoint to unfreeze/reactivate a frozen restaurant
+exports.unfreezeRestaurant = async (req, res) => {
+  try {
+    // Verify admin authentication
+    const user = await User.findById(req.user._id);
+    if (!user || user.role !== "admin") {
+      return res.status(403).json({ message: "Unauthorized: Admin access required" });
+    }
+
+    const restaurantId = req.params.id;
+    const { reason = "Admin verification" } = req.body;
+
+    // Find restaurant
+    const restaurant = await Restaurant.findById(restaurantId);
+    if (!restaurant) {
+      return res.status(404).json({ message: "Restaurant not found" });
+    }
+
+    // Check if restaurant is actually frozen
+    if (restaurant.isActive === true && !restaurant.frozenReason) {
+      return res.status(400).json({ message: "Restaurant is not frozen" });
+    }
+
+    // Check if new license is valid (if frozen due to licence expiry)
+    if (restaurant.frozenReason && restaurant.frozenReason.includes("licence")) {
+      const licenceExpiry = restaurant.documents?.license?.expiry;
+      if (!licenceExpiry) {
+        return res.status(400).json({ 
+          message: "Cannot unfreeze: No valid licence found. Please upload a new licence document." 
+        });
+      }
+
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      
+      if (licenceExpiry <= today) {
+        return res.status(400).json({ 
+          message: "Cannot unfreeze: Licence is still expired or expiring today. Please upload a valid licence." 
+        });
+      }
+    }
+
+    // Unfreeze restaurant
+    restaurant.isActive = true;
+    restaurant.frozenReason = null;
+    restaurant.frozenDate = null;
+    restaurant.frozenBy = null;
+    restaurant.unfreezedBy = user._id;
+    restaurant.unfreezedDate = new Date();
+    restaurant.unfreezeReason = reason;
+
+    await restaurant.save();
+
+    // Emit socket notification to notify restaurant owner (if needed)
+    const socketService = require("../services/socketService");
+    if (socketService && socketService.emitToAdmin) {
+      socketService.emitToAdmin("restaurant:unfrozen", {
+        restaurantId: restaurant._id.toString(),
+        restaurantName: restaurant.name,
+        unfrozenBy: user.name || user.email,
+        unfreezeReason: reason,
+        timestamp: new Date()
+      });
+    }
+
+    res.status(200).json({
+      message: "Restaurant unfrozen successfully",
+      restaurant: {
+        _id: restaurant._id,
+        name: restaurant.name,
+        email: restaurant.email,
+        isActive: restaurant.isActive,
+        unfreezedDate: restaurant.unfreezedDate
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Admin endpoint to update/renew restaurant food licence (FSSAI)
+exports.updateRestaurantLicence = async (req, res) => {
+  try {
+    // Verify admin authentication
+    const user = await User.findById(req.user._id);
+    if (!user || user.role !== "admin") {
+      return res.status(403).json({ message: "Unauthorized: Admin access required" });
+    }
+
+    const restaurantId = req.params.id;
+    const { licenceNumber, licenceExpiry, licenceUrl, backUrl } = req.body;
+
+    // Validate required fields
+    if (!licenceNumber || !licenceExpiry) {
+      return res.status(400).json({ 
+        message: "Licence number and expiry date are required" 
+      });
+    }
+
+    // Validate expiry date
+    const expiryDate = new Date(licenceExpiry);
+    if (isNaN(expiryDate.getTime())) {
+      return res.status(400).json({ message: "Invalid expiry date format" });
+    }
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
+    if (expiryDate <= today) {
+      return res.status(400).json({ 
+        message: "Licence expiry date must be in the future" 
+      });
+    }
+
+    // Find restaurant
+    const restaurant = await Restaurant.findById(restaurantId);
+    if (!restaurant) {
+      return res.status(404).json({ message: "Restaurant not found" });
+    }
+
+    // Handle file upload if provided
+    let finalLicenceUrl = licenceUrl;
+    let finalBackUrl = backUrl;
+    
+    if (req.files) {
+      if (req.files.licenceImage && req.files.licenceImage[0]) {
+        finalLicenceUrl = getFileUrl(req.files.licenceImage[0]);
+      }
+      if (req.files.licenceBackImage && req.files.licenceBackImage[0]) {
+        finalBackUrl = getFileUrl(req.files.licenceBackImage[0]);
+      }
+    }
+
+    // Update restaurant licence details
+    restaurant.documents = restaurant.documents || {};
+    restaurant.documents.license = {
+      number: licenceNumber,
+      expiry: expiryDate,
+      url: finalLicenceUrl || restaurant.documents.license?.url || "",
+      backUrl: finalBackUrl || restaurant.documents.license?.backUrl || ""
+    };
+
+    // If restaurant was frozen due to expired licence, unfreeze it
+    const wasFrozen = restaurant.frozenReason && restaurant.frozenReason.includes("licence");
+    if (wasFrozen) {
+      restaurant.isActive = true;
+      restaurant.frozenReason = null;
+      restaurant.frozenDate = null;
+      restaurant.frozenBy = null;
+      restaurant.unfreezedBy = user._id;
+      restaurant.unfreezedDate = new Date();
+      restaurant.unfreezeReason = `Food licence renewed - New expiry: ${expiryDate.toLocaleDateString()}`;
+    }
+
+    await restaurant.save();
+
+    // Emit socket notification
+    const socketService = require("../services/socketService");
+    if (socketService && socketService.emitToAdmin) {
+      socketService.emitToAdmin("restaurant:licence_updated", {
+        restaurantId: restaurant._id.toString(),
+        restaurantName: restaurant.name,
+        licenceNumber,
+        licenceExpiry: expiryDate,
+        updatedBy: user.name || user.email,
+        wasUnfrozen: wasFrozen,
+        timestamp: new Date()
+      });
+    }
+
+    res.status(200).json({
+      message: wasFrozen 
+        ? "Licence updated and restaurant unfrozen successfully" 
+        : "Licence updated successfully",
+      restaurant: {
+        _id: restaurant._id,
+        name: restaurant.name,
+        email: restaurant.email,
+        isActive: restaurant.isActive,
+        licence: restaurant.documents.license
+      }
+    });
+  } catch (error) {
+    console.error('Update licence error:', error.message);
+    res.status(500).json({ message: error.message });
   }
 };

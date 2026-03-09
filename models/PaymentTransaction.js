@@ -14,6 +14,8 @@ const paymentTransactionSchema = new mongoose.Schema({
       'rider_manual_payout',    // Manual payout by admin
       'restaurant_commission',  // Commission auto-credited to restaurant wallet
       'restaurant_weekly_payout', // Weekly payout to restaurant
+      'restaurant_manual_payout', // Manual payout to restaurant by admin
+      'admin_commission_payout', // Admin commission payout
       'distance_surcharge',     // Extra fee for distance > 2km
       'rider_freeze',           // Rider account frozen
       'rider_unfreeze',         // Rider account unfrozen

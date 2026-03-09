@@ -322,6 +322,33 @@ function calculateDeliveryCharges(distanceKm) {
     distanceKm: distance
   };
 }
+
+function getSettlementSnapshot(order, restaurant, distanceInfo) {
+  const paymentBreakdown = order?.paymentBreakdown || {};
+  const hasFinalPayable = Number.isFinite(Number(paymentBreakdown.finalPayableToRestaurant));
+  const commissionPercent = Number(restaurant?.adminCommission || DEFAULT_COMMISSION_PERCENT);
+  const orderAmount = Number(order?.totalAmount || 0);
+
+  const commissionAmount = Number.isFinite(Number(order?.adminCommission))
+    ? Number(order.adminCommission)
+    : (orderAmount * commissionPercent) / 100;
+  const settlementDeliveryFee = Number.isFinite(Number(order?.deliveryFee))
+    ? Number(order.deliveryFee)
+    : Number(distanceInfo?.totalDeliveryFee || 0);
+
+  const restaurantNet = hasFinalPayable
+    ? Number(paymentBreakdown.finalPayableToRestaurant)
+    : (orderAmount - commissionAmount - settlementDeliveryFee);
+
+  return {
+    orderAmount,
+    commissionPercent,
+    commissionAmount,
+    settlementDeliveryFee,
+    restaurantNet: Math.max(0, restaurantNet),
+  };
+}
+
 async function processCODDelivery(orderId) {
   const order = await Order.findById(orderId)
     .populate('restaurant')
@@ -339,10 +366,13 @@ async function processCODDelivery(orderId) {
   if (!restaurantWallet) {
     restaurantWallet = await RestaurantWallet.create({ restaurant: restaurant._id });
   }
-  const commissionPercent = restaurant.adminCommission || DEFAULT_COMMISSION_PERCENT;
-  const orderAmount = order.totalAmount;
-  const commissionAmount = (orderAmount * commissionPercent) / 100;
-  const restaurantNet = orderAmount - commissionAmount - distanceInfo.totalDeliveryFee;
+  const {
+    orderAmount,
+    commissionPercent,
+    commissionAmount,
+    settlementDeliveryFee,
+    restaurantNet,
+  } = getSettlementSnapshot(order, restaurant, distanceInfo);
   
   riderWallet.cashInHand += orderAmount;
   const wasFrozen = riderWallet.checkAndFreeze();
@@ -351,9 +381,9 @@ async function processCODDelivery(orderId) {
   await riderWallet.save();
   
   // Update restaurant wallet
-  restaurantWallet.balance += Math.max(0, restaurantNet);
-  restaurantWallet.totalEarnings += Math.max(0, restaurantNet);
-  restaurantWallet.pendingAmount += Math.max(0, restaurantNet);
+  restaurantWallet.balance += restaurantNet;
+  restaurantWallet.totalEarnings += restaurantNet;
+  restaurantWallet.pendingAmount += restaurantNet;
   await restaurantWallet.save();
   
   // Track admin commission
@@ -367,7 +397,7 @@ async function processCODDelivery(orderId) {
   order.cashCollectedAt = new Date();
   order.riderEarning = distanceInfo.riderEarning;
   order.adminCommission = commissionAmount;
-  order.restaurantCommission = Math.max(0, restaurantNet);
+  order.restaurantCommission = restaurantNet;
   await order.save();
   await PaymentTransaction.create({
     order: order._id,
@@ -382,11 +412,11 @@ async function processCODDelivery(orderId) {
       orderAmount,
       commissionPercent,
       commissionAmount,
-      deliveryFee: distanceInfo.totalDeliveryFee,
+      deliveryFee: settlementDeliveryFee,
       distanceSurcharge: distanceInfo.surcharge,
-      restaurantNet: Math.max(0, restaurantNet),
+      restaurantNet,
       riderEarning: distanceInfo.riderEarning,
-      platformEarning: commissionAmount + distanceInfo.totalDeliveryFee,
+      platformEarning: commissionAmount + settlementDeliveryFee,
     },
     note: `COD collected. ${distanceInfo.isLongDistance ? `Long distance (${distanceInfo.distanceKm}km), surcharge ₹${distanceInfo.surcharge}` : ''}`,
     status: 'completed'
@@ -395,12 +425,12 @@ async function processCODDelivery(orderId) {
     order: order._id,
     restaurant: restaurant._id,
     type: 'restaurant_commission',
-    amount: Math.max(0, restaurantNet),
+    amount: restaurantNet,
     breakdown: {
       orderAmount,
       commissionPercent,
       commissionAmount,
-      restaurantNet: Math.max(0, restaurantNet),
+      restaurantNet,
     },
     note: `Commission auto-credited for order #${order._id.toString().slice(-6)}`,
     status: 'completed'
@@ -417,14 +447,14 @@ async function processCODDelivery(orderId) {
     },
     restaurantWallet: {
       balance: restaurantWallet.balance,
-      credited: Math.max(0, restaurantNet)
+      credited: restaurantNet
     },
     breakdown: {
       orderAmount,
       commissionAmount: commissionAmount.toFixed(2),
-      deliveryFee: distanceInfo.totalDeliveryFee,
+      deliveryFee: settlementDeliveryFee,
       distanceSurcharge: distanceInfo.surcharge,
-      restaurantNet: Math.max(0, restaurantNet).toFixed(2),
+      restaurantNet: restaurantNet.toFixed(2),
       riderEarning: distanceInfo.riderEarning,
     }
   };
@@ -438,19 +468,22 @@ async function processOnlineDelivery(orderId) {
   if (!riderWallet) riderWallet = await RiderWallet.create({ rider: order.rider._id });
   let restaurantWallet = await RestaurantWallet.findOne({ restaurant: restaurant._id });
   if (!restaurantWallet) restaurantWallet = await RestaurantWallet.create({ restaurant: restaurant._id });
-  const commissionPercent = restaurant.adminCommission || DEFAULT_COMMISSION_PERCENT;
-  const orderAmount = order.totalAmount;
-  const commissionAmount = (orderAmount * commissionPercent) / 100;
-  const restaurantNet = orderAmount - commissionAmount - distanceInfo.totalDeliveryFee;
+  const {
+    orderAmount,
+    commissionPercent,
+    commissionAmount,
+    settlementDeliveryFee,
+    restaurantNet,
+  } = getSettlementSnapshot(order, restaurant, distanceInfo);
   
   riderWallet.totalEarnings += distanceInfo.riderEarning;
   riderWallet.availableBalance += distanceInfo.riderEarning;
   await riderWallet.save();
   
   // Update restaurant wallet
-  restaurantWallet.balance += Math.max(0, restaurantNet);
-  restaurantWallet.totalEarnings += Math.max(0, restaurantNet);
-  restaurantWallet.pendingAmount += Math.max(0, restaurantNet);
+  restaurantWallet.balance += restaurantNet;
+  restaurantWallet.totalEarnings += restaurantNet;
+  restaurantWallet.pendingAmount += restaurantNet;
   await restaurantWallet.save();
   
   // Track admin commission
@@ -462,7 +495,7 @@ async function processOnlineDelivery(orderId) {
   await adminWallet.save();
   order.riderEarning = distanceInfo.riderEarning;
   order.adminCommission = commissionAmount;
-  order.restaurantCommission = Math.max(0, restaurantNet);
+  order.restaurantCommission = restaurantNet;
   await order.save();
   await PaymentTransaction.create({
     order: order._id,
@@ -477,11 +510,11 @@ async function processOnlineDelivery(orderId) {
       orderAmount,
       commissionPercent,
       commissionAmount,
-      deliveryFee: distanceInfo.totalDeliveryFee,
+      deliveryFee: settlementDeliveryFee,
       distanceSurcharge: distanceInfo.surcharge,
-      restaurantNet: Math.max(0, restaurantNet),
+      restaurantNet,
       riderEarning: distanceInfo.riderEarning,
-      platformEarning: commissionAmount + distanceInfo.totalDeliveryFee
+      platformEarning: commissionAmount + settlementDeliveryFee
     },
     status: 'completed'
   });
@@ -490,7 +523,7 @@ async function processOnlineDelivery(orderId) {
     breakdown: {
       orderAmount,
       commissionAmount,
-      restaurantNet: Math.max(0, restaurantNet),
+      restaurantNet,
       riderEarning: distanceInfo.riderEarning,
       distanceSurcharge: distanceInfo.surcharge,
     }
