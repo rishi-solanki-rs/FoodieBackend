@@ -1,4 +1,5 @@
 const FoodCategory = require("../models/FoodCategory");
+const Category = require("../models/Category");
 const Product = require("../models/Product");
 const Restaurant = require("../models/Restaurant");
 const { formatProductForUser } = require("../utils/responseFormatter");
@@ -180,7 +181,15 @@ exports.getMenu = async (req, res) => {
     const categoryIds = [
       ...new Set(products.map((p) => p.category.toString())),
     ];
-    const categories = await FoodCategory.find({ _id: { $in: categoryIds } });
+
+    // Fetch from both new FoodCategory model and old Category model for backward compatibility
+    const [foodCategories, oldCategories] = await Promise.all([
+      FoodCategory.find({ _id: { $in: categoryIds } }),
+      Category.find({ _id: { $in: categoryIds } })
+    ]);
+
+    // Combine them
+    const categories = [...foodCategories, ...oldCategories];
     const menu = {};
     const menuByCategoryId = {};
     categories.forEach((cat) => {
