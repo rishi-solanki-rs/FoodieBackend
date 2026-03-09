@@ -225,7 +225,7 @@ exports.handleRazorpayWebhook = async (req, res) => {
     try {
         const expectedSignature = crypto
             .createHmac("sha256", webhookSecret)
-            .update(JSON.stringify(req.body))
+            .update(req.body) // req.body is a raw buffer
             .digest("hex");
 
         if (expectedSignature !== signature) {
@@ -237,8 +237,15 @@ exports.handleRazorpayWebhook = async (req, res) => {
         return res.status(400).json({ success: false, message: "Webhook error" });
     }
 
-    const event = req.body.event;
-    const paymentEntity = req.body.payload?.payment?.entity;
+    let parsedBody;
+    try {
+        parsedBody = JSON.parse(req.body.toString());
+    } catch (e) {
+        return res.status(400).json({ success: false, message: "Invalid JSON payload" });
+    }
+
+    const event = parsedBody.event;
+    const paymentEntity = parsedBody.payload?.payment?.entity;
 
     try {
         if (event === "payment.captured") {

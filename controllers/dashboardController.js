@@ -48,7 +48,7 @@ exports.getOverview = async (req, res) => {
     ]);
     const todayEarnings = todayAgg[0]?.total || 0;
     const statusAgg = await Order.aggregate([
-      { $match: {} },
+      { $match: { createdAt: { $gte: start, $lte: end } } },
       {
         $group: {
           _id: "$status",

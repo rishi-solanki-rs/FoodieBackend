@@ -56,7 +56,7 @@ app.use(cors({
   allowedHeaders: ["Content-Type", "Authorization"]
 }));
 const { handleRazorpayWebhook } = require('./controllers/paymentController');
-app.post('/api/payment/razorpay-webhook', handleRazorpayWebhook);
+app.post('/api/payment/razorpay-webhook', express.raw({ type: 'application/json' }), handleRazorpayWebhook);
 app.use(express.json());
 const paymentRoutes = require('./routes/paymentRoutes');
 const paymentSystemRoutes = require('./routes/paymentSystemRoutes'); // NEW: Swiggy-style payment system

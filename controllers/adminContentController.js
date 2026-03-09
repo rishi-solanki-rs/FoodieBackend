@@ -1,4 +1,5 @@
 const MasterCategory = require('../models/MasterCategory'); // <--- Updated Import
+const Category = require('../models/Category');
 const Unit = require('../models/Unit');
 const Tag = require('../models/Tag');
 const Addon = require('../models/Addon');
@@ -12,33 +13,33 @@ exports.addMasterCategory = async (req, res) => {
     try {
         const { name, status } = req.body;
         if (!name || !name.trim()) {
-            return res.status(400).json({ 
+            return res.status(400).json({
                 success: false,
-                message: "Category name is required" 
+                message: "Category name is required"
             });
         }
         const image = req.file ? getFileUrl(req.file) : req.body.image;
         if (!image || !image.trim()) {
-            return res.status(400).json({ 
+            return res.status(400).json({
                 success: false,
-                message: "Category image is required" 
+                message: "Category image is required"
             });
         }
         console.log('📝 Creating master category:', { name, image, status });
-        const newCategory = await MasterCategory.create({ 
-            name: name.trim(), 
-            image, 
-            status: status || 'active' 
+        const newCategory = await MasterCategory.create({
+            name: name.trim(),
+            image,
+            status: status || 'active'
         });
         console.log('✅ Master category created:', newCategory._id);
-        res.status(201).json({ 
+        res.status(201).json({
             success: true,
-            message: "Category added successfully", 
-            data: newCategory 
+            message: "Category added successfully",
+            data: newCategory
         });
     } catch (error) {
         console.error('❌ Error adding master category:', error);
-        res.status(500).json({ 
+        res.status(500).json({
             success: false,
             message: error.message || "Failed to add category",
             error: process.env.NODE_ENV === 'development' ? error.message : undefined
@@ -65,9 +66,9 @@ exports.getAllMasterCategories = async (req, res) => {
         });
     } catch (error) {
         console.error('❌ Error fetching master categories:', error);
-        res.status(500).json({ 
+        res.status(500).json({
             success: false,
-            message: error.message || "Failed to fetch categories" 
+            message: error.message || "Failed to fetch categories"
         });
     }
 };
@@ -75,9 +76,9 @@ exports.getMasterCategoryById = async (req, res) => {
     try {
         const category = await MasterCategory.findById(req.params.id);
         if (!category) {
-            return res.status(404).json({ 
+            return res.status(404).json({
                 success: false,
-                message: "Category not found" 
+                message: "Category not found"
             });
         }
         res.status(200).json({
@@ -86,9 +87,9 @@ exports.getMasterCategoryById = async (req, res) => {
         });
     } catch (error) {
         console.error('❌ Error fetching category:', error);
-        res.status(500).json({ 
+        res.status(500).json({
             success: false,
-            message: error.message || "Failed to fetch category" 
+            message: error.message || "Failed to fetch category"
         });
     }
 };
@@ -97,9 +98,9 @@ exports.updateMasterCategory = async (req, res) => {
         const { id } = req.params;
         const { name, status } = req.body;
         if (name && !name.trim()) {
-            return res.status(400).json({ 
+            return res.status(400).json({
                 success: false,
-                message: "Category name cannot be empty" 
+                message: "Category name cannot be empty"
             });
         }
         const updateData = {};
@@ -109,34 +110,34 @@ exports.updateMasterCategory = async (req, res) => {
             updateData.image = getFileUrl(req.file);
         }
         if (Object.keys(updateData).length === 0) {
-            return res.status(400).json({ 
+            return res.status(400).json({
                 success: false,
-                message: "No data to update" 
+                message: "No data to update"
             });
         }
         console.log('📝 Updating master category:', { id, ...updateData });
         const category = await MasterCategory.findByIdAndUpdate(
-            id, 
-            updateData, 
+            id,
+            updateData,
             { new: true, runValidators: false }
         );
         if (!category) {
-            return res.status(404).json({ 
+            return res.status(404).json({
                 success: false,
-                message: "Category not found" 
+                message: "Category not found"
             });
         }
         console.log('✅ Master category updated:', id);
-        res.status(200).json({ 
+        res.status(200).json({
             success: true,
-            message: "Category updated successfully", 
-            data: category 
+            message: "Category updated successfully",
+            data: category
         });
     } catch (error) {
         console.error('❌ Error updating category:', error);
-        res.status(500).json({ 
+        res.status(500).json({
             success: false,
-            message: error.message || "Failed to update category" 
+            message: error.message || "Failed to update category"
         });
     }
 };
@@ -146,21 +147,21 @@ exports.deleteMasterCategory = async (req, res) => {
         console.log('🗑️ Deleting master category:', id);
         const category = await MasterCategory.findByIdAndDelete(id);
         if (!category) {
-            return res.status(404).json({ 
+            return res.status(404).json({
                 success: false,
-                message: "Category not found" 
+                message: "Category not found"
             });
         }
         console.log('✅ Master category deleted:', id);
-        res.status(200).json({ 
+        res.status(200).json({
             success: true,
-            message: "Category deleted successfully" 
+            message: "Category deleted successfully"
         });
     } catch (error) {
         console.error('❌ Error deleting category:', error);
-        res.status(500).json({ 
+        res.status(500).json({
             success: false,
-            message: error.message || "Failed to delete category" 
+            message: error.message || "Failed to delete category"
         });
     }
 };
@@ -583,8 +584,8 @@ exports.addBanner = async (req, res) => {
     try {
         const { title, type, targetId, targetModel, position } = req.body;
         const image = req.file ? getFileUrl(req.file) : req.body.image;
-        const banner = await Banner.create({ 
-            title, image, type, targetId, targetModel, position 
+        const banner = await Banner.create({
+            title, image, type, targetId, targetModel, position
         });
         res.status(201).json({ message: "Banner created", data: banner });
     } catch (error) {
@@ -630,8 +631,8 @@ exports.updateBanner = async (req, res) => {
             updateData.image = getFileUrl(req.file);
         }
         const updatedBanner = await Banner.findByIdAndUpdate(
-            req.params.id, 
-            updateData, 
+            req.params.id,
+            updateData,
             { new: true }
         );
         res.status(200).json({ message: "Banner updated", data: updatedBanner });
@@ -645,5 +646,132 @@ exports.deleteBanner = async (req, res) => {
         res.status(200).json({ message: "Banner deleted" });
     } catch (error) {
         res.status(500).json({ message: error.message });
+    }
+};
+
+// ============= RESTAURANT CATEGORIES (All from all restaurants) =============
+exports.getAllRestaurantCategories = async (req, res) => {
+    try {
+        const { page = 1, limit = 50 } = req.query;
+        const skip = (page - 1) * limit;
+
+        const total = await Category.countDocuments();
+        const categories = await Category.find()
+            .populate('restaurant', 'name')
+            .skip(skip)
+            .limit(parseInt(limit))
+            .sort({ createdAt: -1 });
+
+        res.status(200).json({
+            success: true,
+            categories,
+            total,
+            page: parseInt(page),
+            limit: parseInt(limit),
+            pages: Math.ceil(total / limit)
+        });
+    } catch (error) {
+        console.error('❌ Error fetching restaurant categories:', error);
+        res.status(500).json({
+            success: false,
+            message: error.message || "Failed to fetch categories"
+        });
+    }
+};
+
+exports.getRestaurantCategoryById = async (req, res) => {
+    try {
+        const category = await Category.findById(req.params.id).populate('restaurant', 'name');
+        if (!category) {
+            return res.status(404).json({
+                success: false,
+                message: "Category not found"
+            });
+        }
+        res.status(200).json({
+            success: true,
+            category
+        });
+    } catch (error) {
+        console.error('❌ Error fetching category:', error);
+        res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+};
+
+exports.updateRestaurantCategory = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { name, status } = req.body;
+
+        const category = await Category.findById(id);
+        if (!category) {
+            return res.status(404).json({
+                success: false,
+                message: "Category not found"
+            });
+        }
+
+        // Update name (support both string and object format)
+        if (name) {
+            if (typeof name === 'string') {
+                category.name.en = name;
+            } else if (typeof name === 'object') {
+                if (name.en) category.name.en = name.en;
+                if (name.de) category.name.de = name.de;
+                if (name.ar) category.name.ar = name.ar;
+            }
+        }
+
+        // Update status/isActive
+        if (status !== undefined) {
+            category.isActive = status === 'active' || status === true;
+        }
+
+        // Update image if provided
+        if (req.file) {
+            category.image = getFileUrl(req.file);
+        } else if (req.body.image) {
+            category.image = req.body.image;
+        }
+
+        await category.save();
+
+        res.status(200).json({
+            success: true,
+            message: "Category updated successfully",
+            category
+        });
+    } catch (error) {
+        console.error('❌ Error updating category:', error);
+        res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+};
+
+exports.deleteRestaurantCategory = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const category = await Category.findByIdAndDelete(id);
+        if (!category) {
+            return res.status(404).json({
+                success: false,
+                message: "Category not found"
+            });
+        }
+        res.status(200).json({
+            success: true,
+            message: "Category deleted successfully"
+        });
+    } catch (error) {
+        console.error('❌ Error deleting category:', error);
+        res.status(500).json({
+            success: false,
+            message: error.message
+        });
     }
 };

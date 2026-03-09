@@ -48,6 +48,10 @@ const {
   getBannerById,
   updateBanner,
   deleteBanner,
+  getAllRestaurantCategories,
+  getRestaurantCategoryById,
+  updateRestaurantCategory,
+  deleteRestaurantCategory,
 } = require("../controllers/adminContentController");
 const adminController = require("../controllers/adminController");
 const dashboardController = require("../controllers/dashboardController");
@@ -143,6 +147,13 @@ router.get("/master-category", protect, admin, getAllMasterCategories);
 router.get("/master-category/:id", protect, admin, getMasterCategoryById);
 router.put("/master-category/:id", protect, admin, upload.single('image'), updateMasterCategory);
 router.delete("/master-category/:id", protect, admin, deleteMasterCategory);
+
+// Restaurant Categories (all categories from all restaurants)
+router.get("/restaurant-categories", protect, admin, getAllRestaurantCategories);
+router.get("/restaurant-categories/:id", protect, admin, getRestaurantCategoryById);
+router.put("/restaurant-categories/:id", protect, admin, upload.single('image'), updateRestaurantCategory);
+router.delete("/restaurant-categories/:id", protect, admin, deleteRestaurantCategory);
+
 router.post("/unit", protect, admin, addUnit);
 router.get("/unit", protect, admin, getAllUnits);
 router.get("/unit/:id", protect, admin, getUnitById);
