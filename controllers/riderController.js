@@ -830,6 +830,52 @@ exports.riderSettlementReport = async (req, res) => {
     res.status(500).json({ message: error.message });
   }
 };
+// exports.adminRiderSettlements = async (req, res) => {
+//   try {
+//     const { from, to, riderId, detail = 'summary', format = 'json' } = req.query;
+//     const Order = require('../models/Order');
+//     const match = { status: 'delivered' };
+//     if (from) match.deliveredAt = { $gte: new Date(from) };
+//     if (to) match.deliveredAt = match.deliveredAt ? { ...match.deliveredAt, $lte: new Date(to) } : { $lte: new Date(to) };
+//     if (riderId) match.rider = require('mongoose').Types.ObjectId(riderId);
+//     if (detail === 'orders') {
+//       const orders = await Order.find(match).populate('rider', 'user').populate('rider.user', 'name').sort({ deliveredAt: -1 });
+//       if (format === 'csv') {
+//         let csv = 'orderId,riderId,riderName,date,totalAmount,riderEarning,cashCollected,deliveredAt\n';
+//         orders.forEach(o => {
+//           const riderName = o.rider && o.rider.user && o.rider.user.name ? o.rider.user.name : '';
+//           csv += `${o._id},${o.rider || ''},${riderName},${o.createdAt.toISOString().split('T')[0]},${(o.totalAmount || 0).toFixed(2)},${(o.riderEarning || 0).toFixed(2)},${(o.cashCollected || 0).toFixed(2)},${o.deliveredAt ? o.deliveredAt.toISOString() : ''}\n`;
+//         });
+//         res.header('Content-Type', 'text/csv');
+//         res.header('Content-Disposition', `attachment; filename="admin-rider-orders-${from || 'all'}-${to || 'now'}.csv"`);
+//         return res.send(csv);
+//       }
+//       return res.status(200).json({ orders });
+//     }
+//     const agg = await Order.aggregate([
+//       { $match: match },
+//       { $group: { _id: '$rider', orders: { $sum: 1 }, earnings: { $sum: '$riderEarning' }, cashCollected: { $sum: '$cashCollected' } } },
+//       { $sort: { earnings: -1 } }
+//     ]);
+//     const results = [];
+//     for (const r of agg) {
+//       const user = await User.findById(r._id).select('name mobile email');
+//       results.push({ rider: r._id, name: user ? user.name : '', mobile: user ? user.mobile : '', orders: r.orders, earnings: r.earnings || 0, cashCollected: r.cashCollected || 0 });
+//     }
+//     if (format === 'csv') {
+//       let csv = 'riderId,name,mobile,orders,earnings,cashCollected\n';
+//       results.forEach(row => {
+//         csv += `${row.rider},${row.name || ''},${row.mobile || ''},${row.orders},${(row.earnings || 0).toFixed(2)},${(row.cashCollected || 0).toFixed(2)}\n`;
+//       });
+//       res.header('Content-Type', 'text/csv');
+//       res.header('Content-Disposition', `attachment; filename="admin-rider-settlements-${from || 'all'}-${to || 'now'}.csv"`);
+//       return res.send(csv);
+//     }
+//     res.status(200).json({ results });
+//   } catch (error) {
+//     res.status(500).json({ message: error.message });
+//   }
+// };
 exports.adminRiderSettlements = async (req, res) => {
   try {
     const { from, to, riderId, detail = 'summary', format = 'json' } = req.query;
@@ -859,8 +905,27 @@ exports.adminRiderSettlements = async (req, res) => {
     ]);
     const results = [];
     for (const r of agg) {
-      const user = await User.findById(r._id).select('name mobile email');
-      results.push({ rider: r._id, name: user ? user.name : '', mobile: user ? user.mobile : '', orders: r.orders, earnings: r.earnings || 0, cashCollected: r.cashCollected || 0 });
+      const riderDoc = await Rider.findById(r._id).populate('user', 'name mobile email');
+      const riderUser = riderDoc?.user;
+      const earnings = Number(r.earnings || 0);
+      const cashCollected = Number(r.cashCollected || 0);
+
+      results.push({
+        rider: r._id,
+        riderId: r._id,
+        name: riderUser?.name || '',
+        riderName: riderUser?.name || '',
+        mobile: riderUser?.mobile || '',
+        phone: riderUser?.mobile || '',
+        email: riderUser?.email || '',
+        orders: r.orders,
+        totalOrders: r.orders,
+        earnings,
+        totalEarnings: earnings,
+        cashCollected,
+        deductions: cashCollected,
+        netSettlement: earnings - cashCollected,
+      });
     }
     if (format === 'csv') {
       let csv = 'riderId,name,mobile,orders,earnings,cashCollected\n';
@@ -876,6 +941,7 @@ exports.adminRiderSettlements = async (req, res) => {
     res.status(500).json({ message: error.message });
   }
 };
+
 exports.requestWithdrawal = async (req, res) => {
   try {
     const { amount, method, bankDetails } = req.body;
