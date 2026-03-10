@@ -1677,21 +1677,21 @@ exports.processRiderPayout = async (req, res) => {
       });
     }
 
-    if (!wallet.balance || wallet.balance === 0) {
+    // ✅ FIX: Use availableBalance instead of balance (RiderWallet has availableBalance)
+    if (!wallet.availableBalance || wallet.availableBalance === 0) {
       return res.status(400).json({
         success: false,
         message: 'No pending balance to payout'
       });
     }
 
-    const payoutAmount = wallet.balance;
+    const payoutAmount = wallet.availableBalance;
 
     // Process payout
-    wallet.totalPayouts += 1;
-    wallet.totalEarningsPaidOut = (wallet.totalEarningsPaidOut || 0) + payoutAmount;
+    wallet.totalPayouts = (wallet.totalPayouts || 0) + payoutAmount;
     wallet.lastPayoutAmount = payoutAmount;
     wallet.lastPayoutAt = new Date();
-    wallet.balance = 0;
+    wallet.availableBalance = 0;
 
     await wallet.save();
 

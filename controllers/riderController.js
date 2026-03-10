@@ -37,6 +37,54 @@ const isPlainObject = (value) => {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 };
 
+const deepMergeObjects = (target = {}, source = {}) => {
+  const output = { ...(target || {}) };
+  if (!isPlainObject(source)) return output;
+
+  Object.keys(source).forEach((key) => {
+    const sourceValue = source[key];
+    const targetValue = output[key];
+
+    if (isPlainObject(sourceValue) && isPlainObject(targetValue)) {
+      output[key] = deepMergeObjects(targetValue, sourceValue);
+    } else {
+      output[key] = sourceValue;
+    }
+  });
+
+  return output;
+};
+
+const extractBracketObject = (body = {}, rootKey) => {
+  const result = {};
+  const prefix = `${rootKey}[`;
+
+  Object.entries(body || {}).forEach(([key, rawValue]) => {
+    if (!key.startsWith(prefix)) return;
+
+    const segments = [];
+    const regex = /\[([^\]]+)\]/g;
+    let match;
+    while ((match = regex.exec(key)) !== null) {
+      segments.push(match[1]);
+    }
+    if (!segments.length) return;
+
+    let cursor = result;
+    for (let i = 0; i < segments.length - 1; i += 1) {
+      const seg = segments[i];
+      if (!isPlainObject(cursor[seg])) cursor[seg] = {};
+      cursor = cursor[seg];
+    }
+
+    const leafKey = segments[segments.length - 1];
+    const parsedValue = parseIfString(rawValue);
+    cursor[leafKey] = parsedValue;
+  });
+
+  return result;
+};
+
 const getAverageRating = (rating) => {
   if (typeof rating === "number") return rating;
   if (rating && typeof rating === "object" && typeof rating.average === "number") {
@@ -1068,12 +1116,27 @@ exports.updateDocuments = async (req, res) => {
   try {
     let { documents, permanentAddress, localAddress, emergencyContactNumber } = req.body;
     documents = parseIfString(documents);
+    const bracketDocuments = extractBracketObject(req.body, 'documents');
+    documents = deepMergeObjects(documents || {}, bracketDocuments);
+
     if (documents !== undefined && !isPlainObject(documents)) {
       return res.status(400).json({ message: 'Invalid documents format' });
     }
+
+    permanentAddress = parseIfString(permanentAddress);
+    localAddress = parseIfString(localAddress);
+    if (permanentAddress !== undefined && !isPlainObject(permanentAddress)) {
+      return res.status(400).json({ message: 'Invalid permanentAddress format' });
+    }
+    if (localAddress !== undefined && !isPlainObject(localAddress)) {
+      return res.status(400).json({ message: 'Invalid localAddress format' });
+    }
+
     const rider = await Rider.findOne({ user: req.user._id });
     if (!rider) return res.status(404).json({ message: 'Rider profile not found' });
-    const updatedDocuments = { ...(rider.documents || {}), ...(documents || {}) };
+
+    const updatedDocuments = deepMergeObjects(rider.documents || {}, documents || {});
+
     if (req.files) {
       if (req.files.licenseFrontImage && req.files.licenseFrontImage[0]) {
         updatedDocuments.license = updatedDocuments.license || {};
@@ -1108,12 +1171,15 @@ exports.updateDocuments = async (req, res) => {
         updatedDocuments.policyVerification.image = getFileUrl(req.files.policyVerification[0]);
       }
     }
+
     rider.documents = updatedDocuments;
-    if (permanentAddress) rider.permanentAddress = parseIfString(permanentAddress);
-    if (localAddress) rider.localAddress = parseIfString(localAddress);
-    if (emergencyContactNumber) rider.emergencyContactNumber = emergencyContactNumber;
+    if (permanentAddress !== undefined) rider.permanentAddress = deepMergeObjects(rider.permanentAddress || {}, permanentAddress);
+    if (localAddress !== undefined) rider.localAddress = deepMergeObjects(rider.localAddress || {}, localAddress);
+    if (emergencyContactNumber !== undefined) rider.emergencyContactNumber = emergencyContactNumber;
+
     rider.verificationStatus = 'pending';
     rider.riderVerified = false;
+
     await rider.save();
     const admins = await User.find({ role: 'admin' });
     const user = await User.findById(req.user._id).select('name');
@@ -1800,6 +1866,9 @@ exports.updateRiderByAdmin = async (req, res) => {
     permanentAddress = parseIfString(permanentAddress);
     localAddress = parseIfString(localAddress);
 
+    const bracketDocuments = extractBracketObject(req.body, 'documents');
+    documents = deepMergeObjects(documents || {}, bracketDocuments);
+
     if (address !== undefined && !isPlainObject(address)) {
       return res.status(400).json({ message: 'Invalid address format' });
     }
@@ -1812,6 +1881,15 @@ exports.updateRiderByAdmin = async (req, res) => {
     if (bankDetails !== undefined && !isPlainObject(bankDetails)) {
       return res.status(400).json({ message: 'Invalid bank details format' });
     }
+    if (permanentAddress !== undefined && !isPlainObject(permanentAddress)) {
+      return res.status(400).json({ message: 'Invalid permanentAddress format' });
+    }
+    if (localAddress !== undefined && !isPlainObject(localAddress)) {
+      return res.status(400).json({ message: 'Invalid localAddress format' });
+    }
+
+    const existingRider = await Rider.findById(req.params.id);
+    if (!existingRider) return res.status(404).json({ message: "Rider not found" });
     
     // Handle profile picture update for User model
     let profilePicUrl = null;
@@ -1821,7 +1899,7 @@ exports.updateRiderByAdmin = async (req, res) => {
     
     // Handle file uploads for documents
     if (req.files) {
-      if (!documents) documents = {};
+      documents = deepMergeObjects(existingRider.documents || {}, documents || {});
       if (req.files.licenseFrontImage && req.files.licenseFrontImage[0]) {
         documents.license = documents.license || {};
         documents.license.frontImage = getFileUrl(req.files.licenseFrontImage[0]);
@@ -1867,13 +1945,22 @@ exports.updateRiderByAdmin = async (req, res) => {
     const updatePayload = {};
     if (workCity !== undefined) updatePayload.workCity = workCity;
     if (workZone !== undefined) updatePayload.workZone = workZone;
-    if (address) updatePayload.address = address;
-    if (vehicle) updatePayload.vehicle = vehicle;
-    if (documents) updatePayload.documents = documents;
-    if (bankDetails) updatePayload.bankDetails = bankDetails;
-    if (permanentAddress) updatePayload.permanentAddress = permanentAddress;
-    if (localAddress) updatePayload.localAddress = localAddress;
-    if (emergencyContactNumber) updatePayload.emergencyContactNumber = emergencyContactNumber;
+    if (address !== undefined) updatePayload.address = deepMergeObjects(existingRider.address || {}, address || {});
+    if (vehicle !== undefined) updatePayload.vehicle = deepMergeObjects(existingRider.vehicle || {}, vehicle || {});
+    if (documents !== undefined) updatePayload.documents = deepMergeObjects(existingRider.documents || {}, documents || {});
+    if (bankDetails !== undefined) updatePayload.bankDetails = deepMergeObjects(existingRider.bankDetails || {}, bankDetails || {});
+    if (permanentAddress !== undefined) updatePayload.permanentAddress = deepMergeObjects(existingRider.permanentAddress || {}, permanentAddress || {});
+    if (localAddress !== undefined) updatePayload.localAddress = deepMergeObjects(existingRider.localAddress || {}, localAddress || {});
+    if (emergencyContactNumber !== undefined) updatePayload.emergencyContactNumber = emergencyContactNumber;
+
+    const verificationSensitiveUpdate =
+      updatePayload.documents !== undefined ||
+      updatePayload.vehicle !== undefined ||
+      updatePayload.bankDetails !== undefined;
+    if (verificationSensitiveUpdate) {
+      updatePayload.verificationStatus = 'pending';
+      updatePayload.riderVerified = false;
+    }
     
     const updatedRider = await Rider.findByIdAndUpdate(
       req.params.id,
