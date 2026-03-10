@@ -310,7 +310,25 @@ async function handleWebhookPaymentSuccess(paymentEntity) {
                 { orderId: order._id, restaurantId }
             );
         }
-        socketService.emitToRestaurant(restaurantId, "order:new", { orderId: order._id, status: "placed", paymentStatus: "paid" });
+
+        const webhookRestaurantPayload = {
+            orderId: order._id,
+            restaurantId,
+            customerId: order.customer._id.toString(),
+            customerName: order.customer.name,
+            restaurantName: order.restaurant.name,
+            itemCount: order.items.length,
+            amount: order.totalAmount,
+            totalAmount: order.totalAmount,
+            paymentMethod: order.paymentMethod,
+            paymentStatus: "paid",
+            status: "placed",
+            timestamp: new Date(),
+        };
+
+        socketService.emitToRestaurant(restaurantId, "order:new", webhookRestaurantPayload);
+        socketService.emitToRestaurant(restaurantId, "restaurant:new_order", webhookRestaurantPayload);
+
         socketService.emitToCustomer(order.customer._id.toString(), "order:status", {
             orderId: order._id, status: "placed", paymentStatus: "paid",
             message: "Payment confirmed! Your order has been sent to the restaurant.", timestamp: new Date(),

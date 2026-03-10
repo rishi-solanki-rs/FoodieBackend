@@ -228,12 +228,28 @@ exports.handleRiderResponse = async (riderUserId, requestId, action) => {
                 },
                 message: `Rider ${rider.user.name} is on the way`
             };
-            socketService.emitToOrder(targetOrder._id.toString(), 'order:rider_assigned', {
+            const riderAssignedPayload = {
                 orderId: targetOrder._id,
+                status: 'assigned',
                 riderName: rider.user.name || 'Rider',
                 riderPhone: rider.user.mobile,
-                vehicleNumber: rider.vehicle?.number
-            });
+                vehicleNumber: rider.vehicle?.number,
+                rider: {
+                    name: rider.user.name || 'Rider',
+                    phone: rider.user.mobile,
+                    vehicle: rider.vehicle,
+                },
+                timestamp: new Date(),
+            };
+
+            // Emit to order room (for any client that joined the specific order room)
+            socketService.emitToOrder(targetOrder._id.toString(), 'order:rider_assigned', riderAssignedPayload);
+
+            // Emit to restaurant room — so DeliveryHome.unsubRiderAssigned fires correctly
+            if (targetOrder.restaurant) {
+                socketService.emitToRestaurant(targetOrder.restaurant.toString(), 'order:rider_assigned', riderAssignedPayload);
+            }
+
             if (targetOrder.customer) {
                 socketService.emitToCustomer(targetOrder.customer.toString(), 'order:status', updateData);
             }
