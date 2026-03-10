@@ -2238,14 +2238,45 @@ exports.verifyDelivery = async (req, res) => {
       order.cashCollectedBy = req.user._id;
     }
     await order.save();
+    let settlementPayload = null;
     try {
       const { processCODDelivery, processOnlineDelivery } = require('../services/paymentService');
       const Restaurant = require('../models/Restaurant');
-      if (order.paymentMethod === 'cod') {
-        await processCODDelivery(order._id);
-      } else {
-        await processOnlineDelivery(order._id);
-      }
+      const RiderWallet = require('../models/RiderWallet');
+      const RestaurantWallet = require('../models/RestaurantWallet');
+
+      const settlementResult = order.paymentMethod === 'cod'
+        ? await processCODDelivery(order._id)
+        : await processOnlineDelivery(order._id);
+
+      const [riderWallet, restaurantWallet] = await Promise.all([
+        RiderWallet.findOne({ rider: riderProfile._id }).lean(),
+        RestaurantWallet.findOne({ restaurant: order.restaurant }).lean(),
+      ]);
+
+      settlementPayload = {
+        orderId: order._id,
+        status: settlementResult?.alreadyProcessed ? 'already_processed' : 'processed',
+        paymentMethod: order.paymentMethod,
+        rider: riderWallet ? {
+          availableBalance: Number((riderWallet.availableBalance || 0).toFixed(2)),
+          totalEarnings: Number((riderWallet.totalEarnings || 0).toFixed(2)),
+          cashInHand: Number((riderWallet.cashInHand || 0).toFixed(2)),
+          isFrozen: !!riderWallet.isFrozen,
+        } : null,
+        restaurant: restaurantWallet ? {
+          balance: Number((restaurantWallet.balance || 0).toFixed(2)),
+          totalEarnings: Number((restaurantWallet.totalEarnings || 0).toFixed(2)),
+          pendingAmount: Number((restaurantWallet.pendingAmount || 0).toFixed(2)),
+        } : null,
+        breakdown: settlementResult?.breakdown || null,
+        timestamp: new Date(),
+      };
+
+      socketService.emitToRider(riderProfile._id.toString(), 'rider:earnings_updated', settlementPayload);
+      socketService.emitToRestaurant(order.restaurant.toString(), 'restaurant:earnings_updated', settlementPayload);
+      socketService.emitToAdmin('earnings:updated', settlementPayload);
+
       Restaurant.findByIdAndUpdate(order.restaurant, {
         $inc: {
           totalDeliveries: 1,
@@ -2271,7 +2302,8 @@ exports.verifyDelivery = async (req, res) => {
       orderId: order._id,
       status: 'delivered',
       timestamp: new Date(),
-      timeline: order.timeline
+      timeline: order.timeline,
+      settlement: settlementPayload,
     });
     socketService.emitToAdmin('order:status', {
       orderId: order._id,
@@ -2279,7 +2311,8 @@ exports.verifyDelivery = async (req, res) => {
       totalAmount: order.totalAmount,
       amount: order.totalAmount,
       timestamp: new Date(),
-      timeline: order.timeline
+      timeline: order.timeline,
+      settlement: settlementPayload,
     });
     try {
       const notificationService = require('../utils/notificationService');

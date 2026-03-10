@@ -371,7 +371,10 @@ function getSettlementSnapshot(order, restaurant, distanceInfo) {
 async function findExistingSettlementTransaction(orderId) {
   return PaymentTransaction.findOne({
     order: orderId,
-    type: { $in: ['cod_collected', 'online_payment', 'wallet_payment', 'rider_earning_credit'] },
+    // Use settlement marker transaction types only.
+    // Do not use raw payment transactions here, otherwise delivery settlement
+    // can be skipped before rider/restaurant wallets are credited.
+    type: { $in: ['cod_collected', 'restaurant_commission'] },
     status: { $in: ['completed', 'pending'] },
   }).select('_id type status amount').lean();
 }

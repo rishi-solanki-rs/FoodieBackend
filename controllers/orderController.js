@@ -181,7 +181,7 @@ exports.placeOrder = async (req, res) => {
     if (!addressId || typeof addressId !== "string") {
       return sendError(res, 400, "addressId is required");
     }
-    if (!["wallet", "online"].includes(paymentMethod)) {
+    if (!['wallet', 'online'].includes(paymentMethod)) {
       return sendError(res, 400, "Invalid paymentMethod. Only 'wallet' and 'online' (Razorpay) are accepted.");
     }
     const user = await User.findById(req.user._id);
@@ -1413,10 +1413,37 @@ exports.updateOrderStatus = async (req, res) => {
       );
       try {
         const { processCODDelivery, processOnlineDelivery } = require('../services/paymentService');
-        if (order.paymentMethod === 'cod') {
-          await processCODDelivery(order._id);
-        } else {
-          await processOnlineDelivery(order._id);
+        const RiderWallet = require('../models/RiderWallet');
+        const RestaurantWallet = require('../models/RestaurantWallet');
+        const settlementResult = order.paymentMethod === 'cod'
+          ? await processCODDelivery(order._id)
+          : await processOnlineDelivery(order._id);
+        if (order.rider) {
+          const [riderWallet, restaurantWallet] = await Promise.all([
+            RiderWallet.findOne({ rider: order.rider }).lean(),
+            RestaurantWallet.findOne({ restaurant: order.restaurant }).lean(),
+          ]);
+          const settlementPayload = {
+            orderId: order._id,
+            status: settlementResult?.alreadyProcessed ? 'already_processed' : 'processed',
+            paymentMethod: order.paymentMethod,
+            rider: riderWallet ? {
+              availableBalance: Number((riderWallet.availableBalance || 0).toFixed(2)),
+              totalEarnings: Number((riderWallet.totalEarnings || 0).toFixed(2)),
+              cashInHand: Number((riderWallet.cashInHand || 0).toFixed(2)),
+              isFrozen: !!riderWallet.isFrozen,
+            } : null,
+            restaurant: restaurantWallet ? {
+              balance: Number((restaurantWallet.balance || 0).toFixed(2)),
+              totalEarnings: Number((restaurantWallet.totalEarnings || 0).toFixed(2)),
+              pendingAmount: Number((restaurantWallet.pendingAmount || 0).toFixed(2)),
+            } : null,
+            breakdown: settlementResult?.breakdown || null,
+            timestamp: new Date(),
+          };
+          socketService.emitToRider(order.rider.toString(), 'rider:earnings_updated', settlementPayload);
+          socketService.emitToRestaurant(order.restaurant.toString(), 'restaurant:earnings_updated', settlementPayload);
+          socketService.emitToAdmin('earnings:updated', settlementPayload);
         }
       } catch (payErr) {
         logger.error("Failed to trigger payment processing on delivery", { orderId: order._id, error: payErr.message });
@@ -2278,10 +2305,37 @@ exports.adminUpdateStatus = async (req, res) => {
 
       try {
         const { processCODDelivery, processOnlineDelivery } = require('../services/paymentService');
-        if (order.paymentMethod === 'cod') {
-          await processCODDelivery(order._id);
-        } else {
-          await processOnlineDelivery(order._id);
+        const RiderWallet = require('../models/RiderWallet');
+        const RestaurantWallet = require('../models/RestaurantWallet');
+        const settlementResult = order.paymentMethod === 'cod'
+          ? await processCODDelivery(order._id)
+          : await processOnlineDelivery(order._id);
+        if (order.rider) {
+          const [riderWallet, restaurantWallet] = await Promise.all([
+            RiderWallet.findOne({ rider: order.rider }).lean(),
+            RestaurantWallet.findOne({ restaurant: order.restaurant }).lean(),
+          ]);
+          const settlementPayload = {
+            orderId: order._id,
+            status: settlementResult?.alreadyProcessed ? 'already_processed' : 'processed',
+            paymentMethod: order.paymentMethod,
+            rider: riderWallet ? {
+              availableBalance: Number((riderWallet.availableBalance || 0).toFixed(2)),
+              totalEarnings: Number((riderWallet.totalEarnings || 0).toFixed(2)),
+              cashInHand: Number((riderWallet.cashInHand || 0).toFixed(2)),
+              isFrozen: !!riderWallet.isFrozen,
+            } : null,
+            restaurant: restaurantWallet ? {
+              balance: Number((restaurantWallet.balance || 0).toFixed(2)),
+              totalEarnings: Number((restaurantWallet.totalEarnings || 0).toFixed(2)),
+              pendingAmount: Number((restaurantWallet.pendingAmount || 0).toFixed(2)),
+            } : null,
+            breakdown: settlementResult?.breakdown || null,
+            timestamp: new Date(),
+          };
+          socketService.emitToRider(order.rider.toString(), 'rider:earnings_updated', settlementPayload);
+          socketService.emitToRestaurant(order.restaurant.toString(), 'restaurant:earnings_updated', settlementPayload);
+          socketService.emitToAdmin('earnings:updated', settlementPayload);
         }
       } catch (payErr) {
         logger.error("Failed to trigger payment processing on admin delivered update", {
