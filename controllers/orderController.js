@@ -546,6 +546,7 @@ exports.getOrderDetailsCustomer = async (req, res) => {
             avatar: orderObj.rider.user?.profilePic,
             rating: getAverageRating(orderObj.rider.rating),
             ratingCount: getRatingCount(orderObj.rider.rating),
+            isRated: orderObj.restaurantRatedRider ?? false,
             vehicle: orderObj.rider.vehicle,
             currentLocation: orderObj.rider.currentLocation,
           }
@@ -1187,6 +1188,83 @@ exports.rateRider = async (req, res) => {
     });
   } catch (error) {
     res.status(500).json({ message: error.message });
+  }
+};
+
+// POST /orders/restaurant/:id/rate-rider — restaurant owner rates the rider
+exports.rateRiderByRestaurant = async (req, res) => {
+  try {
+    if (!req.user || !isValidObjectId(req.user._id)) {
+      return sendError(res, 401, "Unauthorized");
+    }
+
+    const numericRating = Number(req.body.rating);
+    const comment = typeof req.body.comment === "string" ? req.body.comment.trim() : "";
+    if (!Number.isFinite(numericRating) || numericRating < 1 || numericRating > 5) {
+      return sendError(res, 400, "Rating must be between 1 and 5");
+    }
+
+    const restaurant = await Restaurant.findOne({ owner: req.user._id }).select("_id");
+    if (!restaurant) return sendError(res, 404, "Restaurant not found");
+
+    const order = await Order.findById(req.params.id);
+    if (!order) return sendError(res, 404, "Order not found");
+    if (order.restaurant.toString() !== restaurant._id.toString()) {
+      return sendError(res, 403, "Access denied");
+    }
+    if (order.status !== "delivered") {
+      return sendError(res, 400, "Can only rate after delivery");
+    }
+    if (order.restaurantRatedRider) {
+      return sendError(res, 400, "You have already rated the rider for this order");
+    }
+    if (!order.rider) {
+      return sendError(res, 400, "No rider assigned to this order");
+    }
+
+    const riderDoc = await Rider.findById(order.rider);
+    let riderNewRating = 0;
+    if (riderDoc) {
+      const existing = riderDoc.rating || {};
+      const prevCount = Number(existing.count) || 0;
+      const prevAvg = Number(existing.average) || 0;
+      const newCount = prevCount + 1;
+      const newAvg = Math.round(((prevAvg * prevCount + numericRating) / newCount) * 10) / 10;
+
+      riderDoc.rating = {
+        average: newAvg,
+        count: newCount,
+        breakdown: {
+          five: (existing.breakdown?.five || 0) + (numericRating === 5 ? 1 : 0),
+          four: (existing.breakdown?.four || 0) + (numericRating === 4 ? 1 : 0),
+          three: (existing.breakdown?.three || 0) + (numericRating === 3 ? 1 : 0),
+          two: (existing.breakdown?.two || 0) + (numericRating === 2 ? 1 : 0),
+          one: (existing.breakdown?.one || 0) + (numericRating === 1 ? 1 : 0),
+        },
+        lastRatedAt: new Date(),
+      };
+      await riderDoc.save();
+      riderNewRating = newAvg;
+    }
+
+    order.restaurantRatedRider = true;
+    order.timeline = order.timeline || [];
+    order.timeline.push({
+      status: order.status,
+      timestamp: new Date(),
+      label: "Rider Rated",
+      by: "restaurant_owner",
+      description: comment || "Restaurant rated rider",
+    });
+    await order.save();
+
+    return res.status(201).json({
+      success: true,
+      message: "Rider rated successfully",
+      riderNewRating,
+    });
+  } catch (error) {
+    return sendError(res, 500, "Failed to submit rating", error.message);
   }
 };
 function getStatusLabel(status) {
@@ -2168,13 +2246,51 @@ exports.adminUpdateStatus = async (req, res) => {
     const { status } = req.body;
     const order = await Order.findById(req.params.id);
     if (!order) return res.status(404).json({ message: "Order not found" });
+    const oldStatus = order.status;
     order.status = status;
+    if (status === "delivered" && oldStatus !== "delivered") {
+      order.deliveredAt = new Date();
+      if (order.paymentMethod === "cod") {
+        order.paymentStatus = "paid";
+        order.cashCollected = order.totalAmount;
+        order.cashCollectedAt = new Date();
+        order.cashCollectedBy = req.user?._id;
+      }
+    }
     order.timeline.push({
       status: status,
       timestamp: new Date(),
       note: "Admin status override",
     });
     await order.save();
+
+    if (status === "delivered" && oldStatus !== "delivered") {
+      await Restaurant.findByIdAndUpdate(
+        order.restaurant,
+        {
+          $inc: {
+            totalDeliveries: 1,
+            successfulOrders: 1,
+          },
+        },
+        { new: true },
+      );
+
+      try {
+        const { processCODDelivery, processOnlineDelivery } = require('../services/paymentService');
+        if (order.paymentMethod === 'cod') {
+          await processCODDelivery(order._id);
+        } else {
+          await processOnlineDelivery(order._id);
+        }
+      } catch (payErr) {
+        logger.error("Failed to trigger payment processing on admin delivered update", {
+          orderId: order._id,
+          error: payErr.message,
+        });
+      }
+    }
+
     res.status(200).json({ message: "Status updated by Admin", order });
   } catch (error) {
     res.status(500).json({ message: error.message });

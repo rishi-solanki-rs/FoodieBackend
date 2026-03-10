@@ -480,10 +480,31 @@ async function processCODDelivery(orderId) {
       riderWallet.availableBalance += riderEarning;
       await riderWallet.save({ session });
 
+      await Rider.updateOne(
+        { _id: fullOrder.rider._id },
+        {
+          $inc: {
+            totalEarnings: riderEarning,
+            currentBalance: riderEarning,
+          },
+        },
+        { session },
+      );
+
       restaurantWallet.balance += restaurantNet;
       restaurantWallet.totalEarnings += restaurantNet;
       restaurantWallet.pendingAmount += restaurantNet;
       await restaurantWallet.save({ session });
+
+      await Restaurant.updateOne(
+        { _id: restaurant._id },
+        {
+          $inc: {
+            totalEarnings: restaurantNet,
+          },
+        },
+        { session },
+      );
 
       let adminWallet = await AdminCommissionWallet.findOne().session(session);
       if (!adminWallet) {
@@ -677,10 +698,31 @@ async function processOnlineDelivery(orderId) {
       riderWallet.availableBalance += riderEarning;
       await riderWallet.save({ session });
 
+      await Rider.updateOne(
+        { _id: fullOrder.rider._id },
+        {
+          $inc: {
+            totalEarnings: riderEarning,
+            currentBalance: riderEarning,
+          },
+        },
+        { session },
+      );
+
       restaurantWallet.balance += restaurantNet;
       restaurantWallet.totalEarnings += restaurantNet;
       restaurantWallet.pendingAmount += restaurantNet;
       await restaurantWallet.save({ session });
+
+      await Restaurant.updateOne(
+        { _id: restaurant._id },
+        {
+          $inc: {
+            totalEarnings: restaurantNet,
+          },
+        },
+        { session },
+      );
 
       let adminWallet = await AdminCommissionWallet.findOne().session(session);
       if (!adminWallet) {

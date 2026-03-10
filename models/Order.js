@@ -203,6 +203,7 @@ const orderSchema = new mongoose.Schema(
     },
     deliveryDistanceKm: { type: Number, default: 0 }, // Distance between restaurant and customer
     isRated: { type: Boolean, default: false },
+    restaurantRatedRider: { type: Boolean, default: false },
     riderRating: {
       rating: { type: Number, min: 1, max: 5 },
       ratedAt: { type: Date },

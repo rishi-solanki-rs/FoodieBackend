@@ -66,6 +66,7 @@ const {
   customerCancelOrder,       
   getOrderTimeline,        
   rateRider,                 
+  rateRiderByRestaurant,
   resendOTP,                
   resendPickupOTPByRestaurant,
   searchRidersForOrder,
@@ -77,6 +78,7 @@ router.get("/:id/customer", protect, customer, generalOrderLimiter, getOrderDeta
 router.post("/:id/cancel", protect, customer, validateCancelOrder, handleValidationErrors, generalOrderLimiter, customerCancelOrder);
 router.get("/:id/timeline", protect, generalOrderLimiter, getOrderTimeline);
 router.post("/:id/rate-rider", protect, customer, validateRateRider, handleValidationErrors, generalOrderLimiter, rateRider);
+router.post("/restaurant/:id/rate-rider", protect, restaurantOwner, validateRateRider, handleValidationErrors, generalOrderLimiter, rateRiderByRestaurant);
 router.post("/:id/resend-otp", protect, generalOrderLimiter, resendOTP);
 router.get("/restaurant", protect, restaurantOwner, getRestaurantOrders);
 router.get("/restaurant/:id/details", protect, restaurantOwner, getRestaurantOrderDetails);
