@@ -324,7 +324,7 @@ exports.getAllRiderWallets = async (req, res) => {
           email: rider.user?.email,
           totalDeliveries: rider.totalDeliveries || 0,
           averageRating: rider.averageRating || 0,
-          wallet: wallet || { balance: 0, totalLifetimeEarnings: 0 }
+          wallet: wallet || { availableBalance: 0, totalEarnings: 0, cashInHand: 0 }
         };
       })
     );
@@ -367,18 +367,43 @@ exports.getRestaurantPayouts = async (req, res) => {
 exports.createRiderPayout = async (req, res) => {
   try {
     const { riderId, amount, paymentMethod = 'bank_transfer', notes } = req.body;
-    if (!riderId || !amount) return res.status(400).json({ success: false, message: 'riderId and amount are required' });
+    const payoutAmount = Number(amount);
+    if (!riderId || !Number.isFinite(payoutAmount) || payoutAmount <= 0) {
+      return res.status(400).json({ success: false, message: 'riderId and valid positive amount are required' });
+    }
     const rider = await Rider.findById(riderId);
     if (!rider) return res.status(404).json({ success: false, message: 'Rider not found' });
     const wallet = await RiderWallet.findOne({ rider: riderId });
     if (!wallet) return res.status(404).json({ success: false, message: 'Wallet not found' });
-    if (wallet.balance < amount) return res.status(400).json({ success: false, message: `Insufficient balance. Available: ₹${wallet.balance}` });
-    const payout = await Payout.create({ rider: riderId, amount, paymentMethod, notes, status: 'pending', processedBy: req.user._id });
-    wallet.balance -= amount;
-    wallet.totalPaidOut += amount;
+    if (wallet.availableBalance < payoutAmount) {
+      return res.status(400).json({
+        success: false,
+        message: `Insufficient balance. Available: ₹${wallet.availableBalance}`
+      });
+    }
+    const payout = await Payout.create({
+      rider: riderId,
+      amount: payoutAmount,
+      paymentMethod,
+      notes,
+      status: 'pending',
+      processedBy: req.user._id
+    });
+    wallet.availableBalance -= payoutAmount;
+    wallet.totalPayouts += payoutAmount;
     wallet.lastPayoutAt = new Date();
-    wallet.lastPayoutAmount = amount;
+    wallet.lastPayoutAmount = payoutAmount;
     await wallet.save();
+
+    await PaymentTransaction.create({
+      rider: riderId,
+      type: 'rider_manual_payout',
+      amount: payoutAmount,
+      processedBy: req.user._id,
+      note: notes || `Manual rider payout initiated via ${paymentMethod}`,
+      status: 'pending'
+    });
+
     return res.status(201).json({ success: true, message: 'Payout created successfully', data: payout });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
@@ -388,18 +413,38 @@ exports.createRiderPayout = async (req, res) => {
 exports.createRestaurantPayout = async (req, res) => {
   try {
     const { restaurantId, amount, paymentMethod = 'bank_transfer', notes } = req.body;
-    if (!restaurantId || !amount) return res.status(400).json({ success: false, message: 'restaurantId and amount are required' });
+    const payoutAmount = Number(amount);
+    if (!restaurantId || !Number.isFinite(payoutAmount) || payoutAmount <= 0) {
+      return res.status(400).json({ success: false, message: 'restaurantId and valid positive amount are required' });
+    }
     const restaurant = await Restaurant.findById(restaurantId);
     if (!restaurant) return res.status(404).json({ success: false, message: 'Restaurant not found' });
     const wallet = await RestaurantWallet.findOne({ restaurant: restaurantId });
     if (!wallet) return res.status(404).json({ success: false, message: 'Wallet not found' });
-    if (wallet.balance < amount) return res.status(400).json({ success: false, message: `Insufficient balance. Available: ₹${wallet.balance}` });
-    const payout = await Payout.create({ restaurant: restaurantId, amount, paymentMethod, notes, status: 'pending', processedBy: req.user._id });
-    wallet.balance -= amount;
-    wallet.totalPaidOut += amount;
+    if (wallet.balance < payoutAmount) return res.status(400).json({ success: false, message: `Insufficient balance. Available: ₹${wallet.balance}` });
+    const payout = await Payout.create({
+      restaurant: restaurantId,
+      amount: payoutAmount,
+      paymentMethod,
+      notes,
+      status: 'pending',
+      processedBy: req.user._id
+    });
+    wallet.balance -= payoutAmount;
+    wallet.totalPaidOut += payoutAmount;
     wallet.lastPayoutAt = new Date();
-    wallet.lastPayoutAmount = amount;
+    wallet.lastPayoutAmount = payoutAmount;
     await wallet.save();
+
+    await PaymentTransaction.create({
+      restaurant: restaurantId,
+      type: 'restaurant_manual_payout',
+      amount: payoutAmount,
+      processedBy: req.user._id,
+      note: notes || `Manual restaurant payout initiated via ${paymentMethod}`,
+      status: 'pending'
+    });
+
     return res.status(201).json({ success: true, message: 'Payout created successfully', data: payout });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });

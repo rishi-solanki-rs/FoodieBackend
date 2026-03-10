@@ -60,7 +60,7 @@ const orderSchema = new mongoose.Schema(
     },
     paymentMethod: {
       type: String,
-      enum: ["wallet", "online"],
+      enum: ["wallet", "online", "cod"],
     },
     paymentStatus: {
       type: String,
@@ -70,6 +70,12 @@ const orderSchema = new mongoose.Schema(
     razorpayOrderId: { type: String },
     transactionId: { type: String },
     paidAt: { type: Date },
+    settlementStatus: {
+      type: String,
+      enum: ["pending", "processing", "processed"],
+      default: "pending",
+    },
+    settlementProcessedAt: { type: Date },
     status: {
       type: String,
       enum: [

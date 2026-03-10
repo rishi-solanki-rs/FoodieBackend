@@ -113,6 +113,14 @@ const restaurantSchema = new mongoose.Schema(
       }
     },
     verificationStatus: { type: String, enum: ['pending', 'verified', 'rejected'], default: 'pending' },
+    accountStatus: {
+      type: String,
+      enum: ['active', 'blocked', 'suspended'],
+      default: 'active'
+    },
+    blockedReason: { type: String },
+    blockedAt: { type: Date },
+    blockedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     verificationNotes: { type: String },
     rejectionReason: { type: String },
     rejectionDate: { type: Date },

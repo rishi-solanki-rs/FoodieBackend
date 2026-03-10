@@ -34,6 +34,9 @@ const parseIfString = (value) => {
     return value;
   }
 };
+const isPlainObject = (value) => {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+};
 const normalizeCuisine = (value) => {
   if (Array.isArray(value)) return value;
   if (typeof value === "string" && value.trim()) {
@@ -544,6 +547,10 @@ exports.updateRestaurant = async (req, res) => {
       return res.status(404).json({ message: "Restaurant not found" });
     }
     const isAdminUser = req.user && req.user.role === "admin";
+    if (!isAdminUser && restaurant.owner.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ message: "Access denied" });
+    }
+
     if (!isAdminUser && (req.body.email !== undefined || req.body.contactNumber !== undefined)) {
       return res.status(400).json({
         message: "Email/Contact number updates require OTP verification. Use request-update endpoint"
@@ -573,6 +580,9 @@ exports.updateRestaurant = async (req, res) => {
       updates.cuisine = normalizeCuisine(parseIfString(updates.cuisine));
     }
     if (updates.location !== undefined) updates.location = parseIfString(updates.location);
+    if (updates.location !== undefined && !isPlainObject(updates.location)) {
+      return res.status(400).json({ message: "Invalid location format" });
+    }
     if (updates.deliveryType !== undefined) {
       updates.deliveryType = normalizeDeliveryType(updates.deliveryType);
     }
@@ -582,6 +592,9 @@ exports.updateRestaurant = async (req, res) => {
       );
     }
     if (updates.timing !== undefined) updates.timing = parseIfString(updates.timing);
+    if (updates.timing !== undefined && !isPlainObject(updates.timing)) {
+      return res.status(400).json({ message: "Invalid timing format" });
+    }
     const ownerAllowed = [
       "name",
       "description",
@@ -922,12 +935,16 @@ exports.updateDocuments = async (req, res) => {
   try {
     const { id } = req.params;
     const restaurant = await Restaurant.findById(id);
+    const isAdminUser = req.user && req.user.role === "admin";
     if (!restaurant)
       return res.status(404).json({ message: "Restaurant not found" });
-    if (restaurant.owner.toString() !== req.user._id.toString())
+    if (!isAdminUser && restaurant.owner.toString() !== req.user._id.toString())
       return res.status(403).json({ message: "Access denied" });
     const documents = restaurant.documents || {};
     const parsedBodyDocuments = parseIfString(req.body.documents);
+    if (parsedBodyDocuments !== undefined && parsedBodyDocuments !== null && !isPlainObject(parsedBodyDocuments)) {
+      return res.status(400).json({ message: "Invalid documents format" });
+    }
     if (parsedBodyDocuments && typeof parsedBodyDocuments === "object") {
       if (parsedBodyDocuments.license) {
         documents.license = { ...(documents.license || {}), ...parsedBodyDocuments.license };
@@ -1004,13 +1021,14 @@ exports.updateBankDetails = async (req, res) => {
   try {
     const { id } = req.params;
     const { bankDetails } = req.body;
+    const isAdminUser = req.user && req.user.role === "admin";
     const restaurant = await Restaurant.findById(id);
     if (!restaurant)
       return res.status(404).json({ message: "Restaurant not found" });
-    if (restaurant.owner.toString() !== req.user._id.toString())
+    if (!isAdminUser && restaurant.owner.toString() !== req.user._id.toString())
       return res.status(403).json({ message: "Access denied" });
     const parsedBankDetails = normalizeBankDetails(
-      bankDetails || req.body.bankDetails || req.body,
+      parseIfString(bankDetails || req.body.bankDetails || req.body),
     );
     if (!Object.keys(parsedBankDetails).length) {
       return res.status(400).json({ message: "No bank details provided" });
@@ -1339,14 +1357,39 @@ exports.updateSettings = async (req, res) => {
       "paymentMethods",
     ];
     allowed.forEach((field) => {
-      if (updates[field] !== undefined) restaurant[field] = updates[field];
+      if (updates[field] === undefined) return;
+
+      // Parse stringified JSON (e.g. when sent as form-data)
+      const value =
+        typeof updates[field] === "string"
+          ? (() => {
+              try {
+                return JSON.parse(updates[field]);
+              } catch {
+                return updates[field];
+              }
+            })()
+          : updates[field];
+
+      restaurant[field] = value;
+
+      // Mongoose won't auto-detect changes to nested objects.
+      if (typeof value === "object" && value !== null) {
+        restaurant.markModified(field);
+      }
     });
+
     await restaurant.save();
-    res.status(200).json({ message: "Settings updated", restaurant });
+
+    // Return only safe owner fields.
+    const result = await restaurant.populate("owner", "name email");
+    res
+      .status(200)
+      .json({ message: "Settings updated successfully", restaurant: result });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
-}; //checkkkkkkkkkkk
+};
 exports.financeSummary = async (req, res) => {
   try {
     const restaurant = await Restaurant.findOne({ owner: req.user._id });
@@ -1883,10 +1926,9 @@ exports.getFrozenRestaurants = async (req, res) => {
     // Add search filter if provided
     if (search && search.trim()) {
       query.$or = [
-        { name: new RegExp(search, "i") },
-        { "owner.email": new RegExp(search, "i") },
-        { "owner.name": new RegExp(search, "i") },
-        { contact: new RegExp(search, "i") }
+        { "name.en": new RegExp(search, "i") },
+        { email: new RegExp(search, "i") },
+        { contactNumber: new RegExp(search, "i") }
       ];
     }
 
@@ -1896,7 +1938,7 @@ exports.getFrozenRestaurants = async (req, res) => {
     // Get frozen restaurants with pagination
     const frozenRestaurants = await Restaurant.find(query)
       .populate("owner", "name email")
-      .select("name owner email contact documents frozenReason frozenDate frozenBy isActive")
+      .select("name owner email contactNumber documents frozenReason frozenDate frozenBy isActive")
       .sort({ frozenDate: -1 })
       .skip(skip)
       .limit(parseInt(limit))
@@ -1907,7 +1949,7 @@ exports.getFrozenRestaurants = async (req, res) => {
       _id: restaurant._id,
       name: restaurant.name,
       email: restaurant.email,
-      contact: restaurant.contact,
+      contactNumber: restaurant.contactNumber,
       owner: restaurant.owner,
       frozenReason: restaurant.frozenReason,
       frozenDate: restaurant.frozenDate,
@@ -1953,7 +1995,7 @@ exports.unfreezeRestaurant = async (req, res) => {
     }
 
     // Check if new license is valid (if frozen due to licence expiry)
-    if (restaurant.frozenReason && restaurant.frozenReason.includes("licence")) {
+    if (restaurant.frozenReason && /licen[cs]e/i.test(restaurant.frozenReason)) {
       const licenceExpiry = restaurant.documents?.license?.expiry;
       if (!licenceExpiry) {
         return res.status(400).json({ 
@@ -2072,7 +2114,7 @@ exports.updateRestaurantLicence = async (req, res) => {
     };
 
     // If restaurant was frozen due to expired licence, unfreeze it
-    const wasFrozen = restaurant.frozenReason && restaurant.frozenReason.includes("licence");
+    const wasFrozen = restaurant.frozenReason && /licen[cs]e/i.test(restaurant.frozenReason);
     if (wasFrozen) {
       restaurant.isActive = true;
       restaurant.frozenReason = null;

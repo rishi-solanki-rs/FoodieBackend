@@ -33,6 +33,10 @@ const parseIfString = (value) => {
   }
 };
 
+const isPlainObject = (value) => {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+};
+
 const getAverageRating = (rating) => {
   if (typeof rating === "number") return rating;
   if (rating && typeof rating === "object" && typeof rating.average === "number") {
@@ -441,11 +445,27 @@ exports.onboardRider = async (req, res) => {
       bankDetails,
       location
     } = req.body;
-    if (typeof address === 'string') address = JSON.parse(address);
-    if (typeof vehicle === 'string') vehicle = JSON.parse(vehicle);
-    if (typeof documents === 'string') documents = JSON.parse(documents);
-    if (typeof bankDetails === 'string') bankDetails = JSON.parse(bankDetails);
-    if (typeof location === 'string') location = JSON.parse(location);
+    address = parseIfString(address);
+    vehicle = parseIfString(vehicle);
+    documents = parseIfString(documents);
+    bankDetails = parseIfString(bankDetails);
+    location = parseIfString(location);
+
+    if (address !== undefined && !isPlainObject(address)) {
+      return sendError(res, 400, "Invalid address format");
+    }
+    if (vehicle !== undefined && !isPlainObject(vehicle)) {
+      return sendError(res, 400, "Invalid vehicle format");
+    }
+    if (documents !== undefined && !isPlainObject(documents)) {
+      return sendError(res, 400, "Invalid documents format");
+    }
+    if (bankDetails !== undefined && !isPlainObject(bankDetails)) {
+      return sendError(res, 400, "Invalid bankDetails format");
+    }
+    if (location !== undefined && !isPlainObject(location)) {
+      return sendError(res, 400, "Invalid location format");
+    }
     const user = await User.findById(req.user._id);
     if (!user || user.role !== "rider") {
       return sendError(res, 401, "Unauthorized");
@@ -488,7 +508,7 @@ exports.onboardRider = async (req, res) => {
       const found = await VehicleModel.findOne({
         $or: [{ name: vehicle.type }, { type: vehicle.type }]
       });
-      if (found) vehicle.type = found._id;
+      if (found) vehicle.type = found.type || found.name || vehicle.type;
     }
     if (reuseRejected) {
       if (!address) address = existing.address;
@@ -520,7 +540,8 @@ exports.onboardRider = async (req, res) => {
         processedDocuments.insurance.image = getFileUrl(req.files.insuranceImage[0]);
       }
       if (req.files.medicalCertificate && req.files.medicalCertificate[0]) {
-        processedDocuments.medicalCertificate = getFileUrl(req.files.medicalCertificate[0]);
+        processedDocuments.medicalCertificate = processedDocuments.medicalCertificate || {};
+        processedDocuments.medicalCertificate.image = getFileUrl(req.files.medicalCertificate[0]);
       }
       if (req.files.panCardImage && req.files.panCardImage[0]) {
         processedDocuments.panCard = processedDocuments.panCard || {};
@@ -723,7 +744,12 @@ exports.toggleBreak = async (req, res) => {
     if (!rider) return res.status(404).json({ message: "Rider not found" });
     rider.breakMode = !rider.breakMode;
     rider.breakReason = reason || rider.breakReason;
-    rider.isAvailable = !rider.breakMode ? rider.isAvailable : false;
+    if (rider.breakMode) {
+      rider.isAvailable = false;
+    } else {
+      const canGoAvailable = rider.riderVerified && rider.verificationStatus === 'approved' && (rider.vehicle?.vehicleVerified || false);
+      rider.isAvailable = canGoAvailable;
+    }
     await rider.save();
     res.json({ message: `Break mode ${rider.breakMode ? 'enabled' : 'disabled'}`, breakMode: rider.breakMode });
   } catch (error) {
@@ -1041,7 +1067,10 @@ exports.clearSOS = async (req, res) => {
 exports.updateDocuments = async (req, res) => {
   try {
     let { documents, permanentAddress, localAddress, emergencyContactNumber } = req.body;
-    if (typeof documents === 'string') documents = JSON.parse(documents);
+    documents = parseIfString(documents);
+    if (documents !== undefined && !isPlainObject(documents)) {
+      return res.status(400).json({ message: 'Invalid documents format' });
+    }
     const rider = await Rider.findOne({ user: req.user._id });
     if (!rider) return res.status(404).json({ message: 'Rider profile not found' });
     const updatedDocuments = { ...(rider.documents || {}), ...(documents || {}) };
@@ -1063,7 +1092,8 @@ exports.updateDocuments = async (req, res) => {
         updatedDocuments.insurance.image = getFileUrl(req.files.insuranceImage[0]);
       }
       if (req.files.medicalCertificate && req.files.medicalCertificate[0]) {
-        updatedDocuments.medicalCertificate = getFileUrl(req.files.medicalCertificate[0]);
+        updatedDocuments.medicalCertificate = updatedDocuments.medicalCertificate || {};
+        updatedDocuments.medicalCertificate.image = getFileUrl(req.files.medicalCertificate[0]);
       }
       if (req.files.panCardImage && req.files.panCardImage[0]) {
         updatedDocuments.panCard = updatedDocuments.panCard || {};
@@ -1097,13 +1127,19 @@ exports.updateDocuments = async (req, res) => {
 };
 exports.updateVehicle = async (req, res) => {
   try {
-    const { vehicle } = req.body; // Expect { type: vehicleId, model, number }
+    let { vehicle } = req.body; // Expect { type, model, number }
+    vehicle = parseIfString(vehicle);
+
+    if (!vehicle || typeof vehicle !== 'object') {
+      return res.status(400).json({ message: 'Vehicle details are required' });
+    }
+
     const rider = await Rider.findOne({ user: req.user._id });
     if (!rider) return res.status(404).json({ message: 'Rider profile not found' });
     if (vehicle && vehicle.type && typeof vehicle.type === 'string') {
       const VehicleModel = require('../models/Vehicle');
       const foundVehicle = await VehicleModel.findOne({ $or: [{ name: vehicle.type }, { type: vehicle.type }] });
-      if (foundVehicle) vehicle.type = foundVehicle._id;
+      if (foundVehicle) vehicle.type = foundVehicle.type || foundVehicle.name || vehicle.type;
     }
     rider.vehicle = { ...(rider.vehicle || {}), ...(vehicle || {}) };
     rider.vehicle.vehicleApproval = rider.vehicle.vehicleApproval || {};
@@ -1124,8 +1160,9 @@ exports.updateVehicle = async (req, res) => {
 };
 exports.updateRiderBankDetails = async (req, res) => {
   try {
-    const { bankDetails } = req.body;
-    if (!bankDetails || typeof bankDetails !== 'object') {
+    let { bankDetails } = req.body;
+    bankDetails = parseIfString(bankDetails);
+    if (!bankDetails || !isPlainObject(bankDetails)) {
       return res.status(400).json({ message: 'Bank details are required' });
     }
     const rider = await Rider.findOne({ user: req.user._id });
@@ -1266,13 +1303,23 @@ exports.adminClearSOS = async (req, res) => {
 exports.updateLocation = async (req, res) => {
   try {
     const { long, lat } = req.body;
+    const longitude = Number(long);
+    const latitude = Number(lat);
+
+    if (!Number.isFinite(longitude) || !Number.isFinite(latitude)) {
+      return res.status(400).json({ message: 'Invalid coordinates' });
+    }
+    if (longitude < -180 || longitude > 180 || latitude < -90 || latitude > 90) {
+      return res.status(400).json({ message: 'Coordinates out of range' });
+    }
+
     const locationUtils = require('../utils/locationUtils');
     const rider = await Rider.findOneAndUpdate(
       { user: req.user._id },
       {
         currentLocation: {
           type: 'Point',
-          coordinates: [long, lat]
+          coordinates: [longitude, latitude]
         },
         lastLocationUpdateAt: new Date() // ✅ CHANGED: field name
       },
@@ -1291,19 +1338,19 @@ exports.updateLocation = async (req, res) => {
         for (const order of activeOrders) {
           try {
             const eta = locationUtils.calculateETA(
-              [long, lat],
+              [longitude, latitude],
               order.deliveryAddress.coordinates,
               order.status
             );
             socketService.emitToCustomer(order.customer.toString(), 'rider:location_updated', {
               orderId: order._id,
               riderLocation: {
-                lat: lat,
-                long: long
+                lat: latitude,
+                long: longitude
               },
               eta: eta,
               riderName: rider.user.name,
-              riderPhone: rider.contactNumber || 'Not provided'
+              riderPhone: rider.user?.mobile || 'Not provided'
             });
           } catch (err) {
             logger.error('Error emitting location to customer', { orderId: order._id, error: err.message });
@@ -1315,7 +1362,7 @@ exports.updateLocation = async (req, res) => {
               activeOrders[0].restaurant.toString(),
               'rider:on_way',
               {
-                riderLocation: { lat, long },
+                riderLocation: { lat: latitude, long: longitude },
                 riderName: rider.user.name
               }
             );
@@ -1327,8 +1374,8 @@ exports.updateLocation = async (req, res) => {
           const adminLocationPayload = {
             riderId: rider._id,
             riderName: rider.user.name,
-            latitude: lat,
-            longitude: long,
+            latitude,
+            longitude,
             activeOrders: activeOrders.length,
             timestamp: new Date()
           };
@@ -1354,12 +1401,28 @@ exports.createRiderByAdmin = async (req, res) => {
       address, workCity, workZone, vehicle, documents, bankDetails,
       permanentAddress, localAddress, emergencyContactNumber
     } = req.body;
-    if (typeof address === 'string') address = JSON.parse(address);
-    if (typeof vehicle === 'string') vehicle = JSON.parse(vehicle);
-    if (typeof documents === 'string') documents = JSON.parse(documents);
-    if (typeof bankDetails === 'string') bankDetails = JSON.parse(bankDetails);
-    if (typeof permanentAddress === 'string') permanentAddress = JSON.parse(permanentAddress);
-    if (typeof localAddress === 'string') localAddress = JSON.parse(localAddress);
+    address = parseIfString(address);
+    vehicle = parseIfString(vehicle);
+    documents = parseIfString(documents);
+    bankDetails = parseIfString(bankDetails);
+    permanentAddress = parseIfString(permanentAddress);
+    localAddress = parseIfString(localAddress);
+
+    if (!password || String(password).length < 6) {
+      throw new Error('Password is required and must be at least 6 characters');
+    }
+    if (address !== undefined && !isPlainObject(address)) {
+      throw new Error('Invalid address format');
+    }
+    if (vehicle !== undefined && !isPlainObject(vehicle)) {
+      throw new Error('Invalid vehicle format');
+    }
+    if (documents !== undefined && !isPlainObject(documents)) {
+      throw new Error('Invalid documents format');
+    }
+    if (bankDetails !== undefined && !isPlainObject(bankDetails)) {
+      throw new Error('Invalid bank details format');
+    }
     const userExists = await User.findOne({ $or: [{ email }, { mobile }] });
     if (userExists) {
       throw new Error('User with this email or mobile already exists');
@@ -1403,7 +1466,8 @@ exports.createRiderByAdmin = async (req, res) => {
         processedDocuments.insurance.image = getFileUrl(req.files.insuranceImage[0]);
       }
       if (req.files.medicalCertificate && req.files.medicalCertificate[0]) {
-        processedDocuments.medicalCertificate = getFileUrl(req.files.medicalCertificate[0]);
+        processedDocuments.medicalCertificate = processedDocuments.medicalCertificate || {};
+        processedDocuments.medicalCertificate.image = getFileUrl(req.files.medicalCertificate[0]);
       }
       if (req.files.panCardImage && req.files.panCardImage[0]) {
         processedDocuments.panCard = processedDocuments.panCard || {};
@@ -1735,6 +1799,19 @@ exports.updateRiderByAdmin = async (req, res) => {
     bankDetails = parseIfString(bankDetails);
     permanentAddress = parseIfString(permanentAddress);
     localAddress = parseIfString(localAddress);
+
+    if (address !== undefined && !isPlainObject(address)) {
+      return res.status(400).json({ message: 'Invalid address format' });
+    }
+    if (vehicle !== undefined && !isPlainObject(vehicle)) {
+      return res.status(400).json({ message: 'Invalid vehicle format' });
+    }
+    if (documents !== undefined && !isPlainObject(documents)) {
+      return res.status(400).json({ message: 'Invalid documents format' });
+    }
+    if (bankDetails !== undefined && !isPlainObject(bankDetails)) {
+      return res.status(400).json({ message: 'Invalid bank details format' });
+    }
     
     // Handle profile picture update for User model
     let profilePicUrl = null;
@@ -1762,7 +1839,8 @@ exports.updateRiderByAdmin = async (req, res) => {
         documents.insurance.image = getFileUrl(req.files.insuranceImage[0]);
       }
       if (req.files.medicalCertificate && req.files.medicalCertificate[0]) {
-        documents.medicalCertificate = getFileUrl(req.files.medicalCertificate[0]);
+        documents.medicalCertificate = documents.medicalCertificate || {};
+        documents.medicalCertificate.image = getFileUrl(req.files.medicalCertificate[0]);
       }
       if (req.files.panCardImage && req.files.panCardImage[0]) {
         documents.panCard = documents.panCard || {};
@@ -1782,11 +1860,13 @@ exports.updateRiderByAdmin = async (req, res) => {
     if (vehicle && vehicle.type && typeof vehicle.type === 'string') {
       const VehicleModel = require('../models/Vehicle');
       const foundVehicle = await VehicleModel.findOne({ $or: [{ name: vehicle.type }, { type: vehicle.type }] });
-      if (foundVehicle) vehicle.type = foundVehicle._id;
+      if (foundVehicle) vehicle.type = foundVehicle.type || foundVehicle.name || vehicle.type;
     }
     
     // Build update payload
-    const updatePayload = { workCity, workZone };
+    const updatePayload = {};
+    if (workCity !== undefined) updatePayload.workCity = workCity;
+    if (workZone !== undefined) updatePayload.workZone = workZone;
     if (address) updatePayload.address = address;
     if (vehicle) updatePayload.vehicle = vehicle;
     if (documents) updatePayload.documents = documents;
@@ -1836,26 +1916,31 @@ exports.deleteRider = async (req, res) => {
 exports.sendSOS = async (req, res) => {
   try {
     const { latitude, longitude, message, orderId } = req.body;
+    const latNum = Number(latitude);
+    const longNum = Number(longitude);
     const rider = await Rider.findOne({ user: req.user._id })
       .populate('user', 'name mobile');
     if (!rider) {
       return res.status(404).json({ message: 'Rider profile not found' });
     }
-    if (!latitude || !longitude) {
+    if (!Number.isFinite(latNum) || !Number.isFinite(longNum)) {
       return res.status(400).json({ message: 'Location coordinates required for SOS' });
+    }
+    if (longNum < -180 || longNum > 180 || latNum < -90 || latNum > 90) {
+      return res.status(400).json({ message: 'Location coordinates out of range' });
     }
     rider.currentLocation = {
       type: 'Point',
-      coordinates: [longitude, latitude]
+      coordinates: [longNum, latNum]
     };
-    rider.lastLocationUpdate = new Date();
+    rider.lastLocationUpdateAt = new Date();
     await rider.save();
     const sosData = {
       riderId: rider._id,
       riderName: rider.user.name,
       riderMobile: rider.user.mobile,
-      latitude,
-      longitude,
+      latitude: latNum,
+      longitude: longNum,
       message: message || 'Emergency - immediate assistance needed',
       orderId: orderId || null,
       timestamp: new Date(),
@@ -1866,7 +1951,7 @@ exports.sendSOS = async (req, res) => {
     const sosTicket = await SupportTicket.create({
       user: req.user._id,
       subject: 'EMERGENCY SOS ALERT',
-      message: `${sosData.message}\n\nLocation: ${latitude}, ${longitude}\nOrder ID: ${orderId || 'N/A'}`,
+      message: `${sosData.message}\n\nLocation: ${latNum}, ${longNum}\nOrder ID: ${orderId || 'N/A'}`,
       category: 'emergency',
       priority: 'urgent',
       status: 'open'
@@ -1877,8 +1962,8 @@ exports.sendSOS = async (req, res) => {
         await sendNotification(
           admin._id,
           'RIDER SOS ALERT',
-          `${rider.user.name} needs immediate assistance! Location: ${latitude}, ${longitude}`,
-          { riderId: rider._id, ticketId: sosTicket._id, latitude, longitude }
+          `${rider.user.name} needs immediate assistance! Location: ${latNum}, ${longNum}`,
+          { riderId: rider._id, ticketId: sosTicket._id, latitude: latNum, longitude: longNum }
         );
       }
     } catch (notifyError) {
@@ -2070,17 +2155,12 @@ exports.verifyDelivery = async (req, res) => {
       const { processCODDelivery, processOnlineDelivery } = require('../services/paymentService');
       const Restaurant = require('../models/Restaurant');
       if (order.paymentMethod === 'cod') {
-        processCODDelivery(order._id).catch(err =>
-          console.error('COD delivery payment processing failed:', err.message)
-        );
+        await processCODDelivery(order._id);
       } else {
-        processOnlineDelivery(order._id).catch(err =>
-          console.error('Online delivery payment processing failed:', err.message)
-        );
+        await processOnlineDelivery(order._id);
       }
       Restaurant.findByIdAndUpdate(order.restaurant, {
         $inc: {
-          totalEarnings: order.restaurantCommission || 0,
           totalDeliveries: 1,
           successfulOrders: 1,
         }
@@ -2800,7 +2880,7 @@ exports.rejectOrder = async (req, res) => {
       await order.save();
     }
     await Rider.findByIdAndUpdate(riderId, {
-      $inc: { 'stats.ordersRejected': 1 }
+      $inc: { cancelledOrders: 1 }
     });
     const { logRiderAction } = require("../utils/logger");
     logRiderAction(order._id, riderId, "rejected", reason);
@@ -2963,17 +3043,13 @@ exports.getMyActiveOrder = async (req, res) => {
           name: order.restaurant.name,
           address: order.restaurant.address,
           phone: order.restaurant.contactNumber,
-          location: order.restaurant.location,
-          pickupOtp: order.pickupOtp,
-          pickupOtpExpiry: order.pickupOtpExpiresAt
+          location: order.restaurant.location
         },
         customer: {
           _id: order.customer._id,
           name: order.customer.name,
           phone: order.customer.phone,
-          deliveryAddress: order.deliveryAddress,
-          deliveryOtp: order.deliveryOtp,
-          deliveryOtpExpiry: order.deliveryOtpExpiresAt
+          deliveryAddress: order.deliveryAddress
         },
         earnings: {
           riderEarning: order.riderEarning || 0,

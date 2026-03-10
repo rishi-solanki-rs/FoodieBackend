@@ -1327,7 +1327,6 @@ exports.updateOrderStatus = async (req, res) => {
         order.restaurant,
         {
           $inc: {
-            totalEarnings: order.restaurantCommission || 0,
             totalDeliveries: 1,
             successfulOrders: 1,
           },
@@ -1337,13 +1336,9 @@ exports.updateOrderStatus = async (req, res) => {
       try {
         const { processCODDelivery, processOnlineDelivery } = require('../services/paymentService');
         if (order.paymentMethod === 'cod') {
-          processCODDelivery(order._id).catch(err =>
-            logger.error("COD delivery payment processing failed", { orderId: order._id, error: err.message })
-          );
+          await processCODDelivery(order._id);
         } else {
-          processOnlineDelivery(order._id).catch(err =>
-            logger.error("Online delivery payment processing failed", { orderId: order._id, error: err.message })
-          );
+          await processOnlineDelivery(order._id);
         }
       } catch (payErr) {
         logger.error("Failed to trigger payment processing on delivery", { orderId: order._id, error: payErr.message });

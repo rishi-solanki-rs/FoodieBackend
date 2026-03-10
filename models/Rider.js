@@ -141,6 +141,14 @@ const riderSchema = new mongoose.Schema({
         enum: ['pending', 'approved', 'rejected', 'suspended'], 
         default: 'pending' 
     },
+    accountStatus: {
+        type: String,
+        enum: ['active', 'blocked', 'suspended'],
+        default: 'active'
+    },
+    blockedReason: { type: String },
+    blockedAt: { type: Date },
+    blockedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     rejectionReason: { type: String },
     rejectionDate: { type: Date },
     rejectedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
