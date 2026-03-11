@@ -12,7 +12,7 @@ exports.findAndNotifyRider = async (orderId) => {
         const order = await Order.findById(orderId);
         if (!order) return console.error('Order not found for dispatch:', orderId);
         if (order.rider || ['cancelled', 'delivered', 'picked_up'].includes(order.status)) return;
-        if (!['accepted', 'ready'].includes(order.status)) return;
+        if (!['accepted', 'preparing', 'ready'].includes(order.status)) return;
 
         const restaurant = await Restaurant.findById(order.restaurant);
         if (!restaurant) return console.error('Restaurant not found for dispatch');

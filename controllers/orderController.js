@@ -1416,6 +1416,7 @@ exports.updateOrderStatus = async (req, res) => {
       description: timeline.description
     });
     if (status === "accepted" && oldStatus === "placed") {
+      if (!order.riderNotificationStatus) order.riderNotificationStatus = {};
       order.riderNotificationStatus.notified = true;
       order.riderNotificationStatus.notifiedAt = new Date();
     }
@@ -1712,6 +1713,7 @@ exports.markOrderReady = async (req, res) => {
       restaurantCoords = restaurantDoc?.location?.coordinates;
     } catch (e) { }
     if (order.rider) {
+      // Emit to rider:<riderId> room (rider joins this room on connect)
       socketService.emitToRider(order.rider._id.toString(), 'order:ready', {
         orderId: order._id.toString(),
         message: 'Order is Ready for Pickup!',
@@ -1719,16 +1721,6 @@ exports.markOrderReady = async (req, res) => {
         status: 'ready',
         timestamp: new Date()
       });
-      const riderDoc = await Rider.findById(order.rider._id).select('user');
-      if (riderDoc?.user) {
-        socketService.emitToRider(riderDoc.user.toString(), 'order:ready', {
-          orderId: order._id.toString(),
-          message: 'Order is Ready for Pickup!',
-          restaurantName,
-          status: 'ready',
-          timestamp: new Date()
-        });
-      }
       try {
         const riderDoc = await Rider.findById(order.rider._id);
         if (riderDoc) {
@@ -1795,6 +1787,7 @@ exports.markOrderReady = async (req, res) => {
               sent.forEach(entry => {
                 riderMap.set(entry.riderId.toString(), entry);
               });
+              if (!order.riderNotificationStatus) order.riderNotificationStatus = {};
               order.riderNotificationStatus.notified = true;
               order.riderNotificationStatus.notifiedAt = new Date();
               order.riderNotificationStatus.notifiedRiders = Array.from(riderMap.values());
@@ -1809,6 +1802,13 @@ exports.markOrderReady = async (req, res) => {
         }
       } catch (err) {
         logger.error("Failed to notify nearby riders on ready", { error: err.message, orderId: order._id });
+      }
+      // Re-trigger the full socket dispatch so riders get a RideRequest they can accept
+      try {
+        const riderDispatchService = require('../services/riderDispatchService');
+        riderDispatchService.findAndNotifyRider(order._id);
+      } catch (e) {
+        logger.error("Failed to trigger rider dispatch on ready", { error: e.message, orderId: order._id });
       }
     }
     try {
