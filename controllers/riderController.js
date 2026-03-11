@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 const Rider = require('../models/Rider');
 const User = require('../models/User');
+const CustomerBill = require('../models/CustomerBill');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
@@ -252,19 +253,6 @@ const getRatingCount = (rating) => {
     return rating.count;
   }
   return 0;
-};
-const generateRiderToken = (res, user) => {
-  const token = jwt.sign(
-    { _id: user._id, role: user.role },
-    process.env.JWT_SECRET,
-    { expiresIn: "7d" }
-  );
-  const options = {
-    expires: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-  };
-  res.cookie("token", token, options);
 };
 exports.updateRiderProfile = async (req, res) => {
   try {
@@ -3517,6 +3505,39 @@ exports.getMyActiveOrder = async (req, res) => {
         message: "No active delivery at the moment"
       });
     }
+
+    const persistedCustomerBill = await CustomerBill.findOne({ order: order._id }).lean();
+    const customerBill = persistedCustomerBill || {
+      generated: false,
+      preview: true,
+      order: order._id,
+      customer: order.customer?._id || order.customer,
+      restaurant: order.restaurant?._id || order.restaurant,
+      itemsTotal: Number(order.itemTotal || 0),
+      restaurantDiscount: Number(order.paymentBreakdown?.restaurantDiscount || 0),
+      platformDiscount: Number(order.paymentBreakdown?.foodierDiscount || order.discount || 0),
+      discountTotal: Number(
+        (order.paymentBreakdown?.restaurantDiscount || 0) +
+        (order.paymentBreakdown?.foodierDiscount || order.discount || 0)
+      ),
+      packagingCharge: Number(order.packaging || order.paymentBreakdown?.packagingCharge || 0),
+      deliveryCharge: Number(order.deliveryFee || 0),
+      platformFee: Number(order.platformFee || 0),
+      tip: Number(order.tip || 0),
+      paymentMethod: order.paymentMethod,
+      paymentStatus: order.paymentStatus,
+      couponCode: order.couponCode || null,
+      finalPayableAmount: Number(order.totalAmount || 0),
+      totalGst: {
+        cgst: 0,
+        sgst: 0,
+        total: Number(
+          (order.tax || 0) +
+          (order.paymentBreakdown?.packagingGST || 0) +
+          (order.paymentBreakdown?.gstOnFood || 0)
+        ),
+      },
+    };
     const { calculateDistance } = require('../utils/locationUtils');
     const riderCoords = riderProfile.currentLocation?.coordinates;
     const restaurantCoords = order.restaurant?.location?.coordinates;
@@ -3608,6 +3629,7 @@ exports.getMyActiveOrder = async (req, res) => {
           tip: order.tip || 0,
           total: (order.riderEarning || 0) + (order.tip || 0)
         },
+        customerBill,
         timeline: order.timeline,
         createdAt: order.createdAt,
         specialInstructions: order.specialInstructions || null,
