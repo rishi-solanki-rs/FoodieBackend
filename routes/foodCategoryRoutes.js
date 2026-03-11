@@ -7,8 +7,12 @@ const {
     updateFoodCategory,
     deleteFoodCategory,
     toggleFoodCategory,
+    getActiveFoodCategories,
 } = require('../controllers/foodCategoryController');
 const { upload } = require('../utils/upload');
+
+// Public: Get active food categories (for restaurants & customers)
+router.get('/active', getActiveFoodCategories);
 
 // Admin: Full CRUD on food categories
 router.get('/', protect, admin, getAllFoodCategoriesAdmin);

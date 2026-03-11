@@ -103,6 +103,30 @@ exports.deleteFoodCategory = async (req, res) => {
 };
 
 /**
+ * GET /api/food-categories/active
+ * Public: Get all active food categories (for restaurants & customers)
+ */
+exports.getActiveFoodCategories = async (req, res) => {
+    try {
+        const categories = await FoodCategory.find({ isActive: true })
+            .sort({ sortOrder: 1, name: 1 })
+            .select('name description image sortOrder')
+            .lean();
+        
+        return res.status(200).json({ 
+            success: true, 
+            categories 
+        });
+    } catch (error) {
+        console.error('getActiveFoodCategories error:', error);
+        return res.status(500).json({ 
+            success: false, 
+            message: error.message 
+        });
+    }
+};
+
+/**
  * PATCH /api/admin/food-categories/:id/toggle
  * Admin: Toggle active/inactive status
  */
