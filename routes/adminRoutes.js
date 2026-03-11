@@ -3,11 +3,6 @@ const router = express.Router();
 const { protect, admin } = require("../middleware/authMiddleware");
 const { upload } = require("../utils/upload");
 const {
-  addMasterCategory,
-  getAllMasterCategories,
-  getMasterCategoryById,
-  updateMasterCategory,
-  deleteMasterCategory,
   addUnit,
   getAllUnits,
   getUnitById,
@@ -142,11 +137,8 @@ const {
   approveRefund,
   rejectRefund,
 } = require("../controllers/refundController");
-router.post("/master-category", protect, admin, upload.single('image'), addMasterCategory);
-router.get("/master-category", protect, admin, getAllMasterCategories);
-router.get("/master-category/:id", protect, admin, getMasterCategoryById);
-router.put("/master-category/:id", protect, admin, upload.single('image'), updateMasterCategory);
-router.delete("/master-category/:id", protect, admin, deleteMasterCategory);
+// Food Categories are now managed via /api/food-categories routes
+// Admin creates categories there, restaurants use them for products
 
 // Restaurant Categories (all categories from all restaurants)
 router.get("/restaurant-categories", protect, admin, getAllRestaurantCategories);
