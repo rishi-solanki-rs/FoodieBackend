@@ -70,6 +70,13 @@ const {
   resendOTP,                
   resendPickupOTPByRestaurant,
   searchRidersForOrder,
+  // Billing
+  getCustomerBill,
+  getRestaurantBill,
+  getRiderBill,
+  getAdminBills,
+  getRestaurantBillingHistory,
+  getRiderBillingHistory,
 } = require("../controllers/orderController");
 router.post("/place", protect, checkServiceAvailability, validatePlaceOrder, handleValidationErrors, placeOrderLimiter, placeOrder);
 router.get("/my-orders", protect, generalOrderLimiter, getMyOrders);
@@ -105,4 +112,15 @@ router.put("/admin/:id/status", protect, admin, adminUpdateStatus);
 router.put("/admin/:id/cancel", protect, admin, adminCancelOrder);
 router.post('/admin/:id/retry-payment', protect, admin, adminRetryPayment);
 router.put('/admin/:id/resolve', protect, admin, adminResolveFailedOrder);
+
+// ── Billing routes ────────────────────────────────────────────────────────────
+// History routes must come BEFORE /:id routes to avoid param conflicts
+router.get('/billing/restaurant-history', protect, restaurantOwner, generalOrderLimiter, getRestaurantBillingHistory);
+router.get('/billing/rider-history',      protect, rider,           generalOrderLimiter, getRiderBillingHistory);
+// Per-order bill routes
+router.get('/:id/customer-bill',  protect, customer,        generalOrderLimiter, getCustomerBill);
+router.get('/:id/restaurant-bill',protect, restaurantOwner, generalOrderLimiter, getRestaurantBill);
+router.get('/:id/rider-bill',     protect, rider,           generalOrderLimiter, getRiderBill);
+router.get('/:id/bills',          protect, admin,           generalOrderLimiter, getAdminBills);
+
 module.exports = router;

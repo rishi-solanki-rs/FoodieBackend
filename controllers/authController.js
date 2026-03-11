@@ -4,7 +4,7 @@ const Rider = require("../models/Rider");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
-const { sendOTP } = require("../services/smsService");
+const { sendOTP, normalizePhoneNumber } = require("../services/smsService");
 const generateToken = (res, user) => {
   const token = jwt.sign(
     { _id: user._id, role: user.role },
@@ -22,9 +22,16 @@ const generateToken = (res, user) => {
 };
 exports.registerInitiate = async (req, res) => {
   try {
-    const { name, email, password, mobile, role } = req.body;
+    const { name, email, password, role } = req.body;
+    let { mobile } = req.body;
     if (!name || !email || !password || !mobile) {
       return res.status(400).json({ message: "All fields are required" });
+    }
+    // Normalize to 10-digit number so DB always stores a consistent format.
+    try {
+      mobile = normalizePhoneNumber(mobile);
+    } catch {
+      return res.status(400).json({ message: "Invalid mobile number format. Use 10-digit or +91XXXXXXXXXX." });
     }
     const allowedRoles = ["customer", "restaurant_owner", "rider"];
     if (role && !allowedRoles.includes(role)) {
@@ -84,9 +91,12 @@ exports.registerInitiate = async (req, res) => {
 };
 exports.registerVerify = async (req, res) => {
   try {
-    const { mobile, otp } = req.body;
+    let { mobile, otp } = req.body;
     if (!mobile || !otp) {
       return res.status(400).json({ message: "Mobile and OTP are required" });
+    }
+    try { mobile = normalizePhoneNumber(mobile); } catch {
+      return res.status(400).json({ message: "Invalid mobile number format" });
     }
     const user = await User.findOne({ mobile });
     if (!user) {
@@ -128,9 +138,15 @@ exports.registerVerify = async (req, res) => {
 };
 exports.checkVerificationStatus = async (req, res) => {
   try {
-    const { mobile, email } = req.body;
+    const { email } = req.body;
+    let { mobile } = req.body;
     if (!mobile && !email) {
       return res.status(400).json({ message: "Mobile or Email is required" });
+    }
+    if (mobile) {
+      try { mobile = normalizePhoneNumber(mobile); } catch {
+        return res.status(400).json({ message: "Invalid mobile number format" });
+      }
     }
     const user = await User.findOne({
       $or: [
@@ -162,9 +178,15 @@ exports.checkVerificationStatus = async (req, res) => {
 };
 exports.resendOTP = async (req, res) => {
   try {
-    const { mobile, email } = req.body;
+    const { email } = req.body;
+    let { mobile } = req.body;
     if (!mobile && !email) {
       return res.status(400).json({ message: "Mobile or Email is required" });
+    }
+    if (mobile) {
+      try { mobile = normalizePhoneNumber(mobile); } catch {
+        return res.status(400).json({ message: "Invalid mobile number format" });
+      }
     }
     const user = await User.findOne({
       $or: [
@@ -204,9 +226,13 @@ exports.resendOTP = async (req, res) => {
 };
 exports.loginUser = async (req, res) => {
   try {
-    const { email, mobile, password } = req.body;
+    const { email, password } = req.body;
+    let { mobile } = req.body;
     if ((!email && !mobile) || !password) {
       return res.status(400).json({ message: "Credentials required" });
+    }
+    if (mobile) {
+      try { mobile = normalizePhoneNumber(mobile); } catch { mobile = null; }
     }
     const user = await User.findOne({
       $or: [
@@ -267,9 +293,15 @@ exports.logoutUser = (req, res) => {
 };
 exports.forgotPasswordInitiate = async (req, res) => {
   try {
-    const { email, mobile } = req.body;
+    const { email } = req.body;
+    let { mobile } = req.body;
     if (!email && !mobile) {
       return res.status(400).json({ message: "Email or Mobile is required" });
+    }
+    if (mobile) {
+      try { mobile = normalizePhoneNumber(mobile); } catch {
+        return res.status(400).json({ message: "Invalid mobile number format" });
+      }
     }
     const user = await User.findOne({
       $or: [
@@ -310,9 +342,15 @@ exports.forgotPasswordInitiate = async (req, res) => {
 };
 exports.resendForgotPasswordOTP = async (req, res) => {
   try {
-    const { email, mobile } = req.body;
+    const { email } = req.body;
+    let { mobile } = req.body;
     if (!email && !mobile) {
       return res.status(400).json({ message: "Email or Mobile is required" });
+    }
+    if (mobile) {
+      try { mobile = normalizePhoneNumber(mobile); } catch {
+        return res.status(400).json({ message: "Invalid mobile number format" });
+      }
     }
     const user = await User.findOne({
       $or: [
@@ -353,9 +391,15 @@ exports.resendForgotPasswordOTP = async (req, res) => {
 };
 exports.forgotPasswordVerifyOTP = async (req, res) => {
   try {
-    const { email, mobile, otp } = req.body;
+    const { email, otp } = req.body;
+    let { mobile } = req.body;
     if ((!email && !mobile) || !otp) {
       return res.status(400).json({ message: "Email/Mobile and OTP are required" });
+    }
+    if (mobile) {
+      try { mobile = normalizePhoneNumber(mobile); } catch {
+        return res.status(400).json({ message: "Invalid mobile number format" });
+      }
     }
     const user = await User.findOne({
       $or: [

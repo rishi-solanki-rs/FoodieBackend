@@ -19,6 +19,15 @@ const AdminSettingSchema = new mongoose.Schema(
       default: 5,
     },
 
+    // GST charged on the platform fee (service tax — standard 18% in India)
+    platformFeeGstPercent: { type: Number, default: 18, min: 0, max: 28 },
+
+    // GST charged on the delivery fee (standard 18% in India)
+    deliveryChargeGstPercent: { type: Number, default: 18, min: 0, max: 28 },
+
+    // GST charged on admin commission billed to the restaurant (18% in India)
+    adminCommissionGstPercent: { type: Number, default: 18, min: 0, max: 28 },
+
     // ─── Platform Pricing ─────────────────────────────────────────────────────
     // Platform fee charged to customer on every order (flat ₹ amount)
     platformFee: { type: Number, default: 9, min: 0 },

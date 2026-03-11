@@ -22,16 +22,18 @@ const normalizePhoneNumber = (input) => {
 };
 
 const buildSmsUrl = (phoneNumber, message) => {
-  const params = new URLSearchParams({
-    'authentic-key': SMS_AUTH_KEY,
-    senderid: SMS_SENDER_ID,
-    route: SMS_ROUTE,
-    number: phoneNumber,
-    message,
-    templateid: SMS_TEMPLATE_ID,
-  });
+  // Use encodeURIComponent (spaces → %20) instead of URLSearchParams (spaces → +).
+  // The infinibs gateway expects %20 encoding — matching the working test-sms-send.js.
+  const query = [
+    `authentic-key=${encodeURIComponent(SMS_AUTH_KEY)}`,
+    `senderid=${encodeURIComponent(SMS_SENDER_ID)}`,
+    `route=${encodeURIComponent(SMS_ROUTE)}`,
+    `number=${encodeURIComponent(phoneNumber)}`,
+    `message=${encodeURIComponent(message)}`,
+    `templateid=${encodeURIComponent(SMS_TEMPLATE_ID)}`,
+  ].join('&');
 
-  return `${SMS_BASE_URL}?${params.toString()}`;
+  return `${SMS_BASE_URL}?${query}`;
 };
 
 const assertGatewaySuccess = (gatewayResponse) => {
@@ -80,4 +82,4 @@ const sendOTP = async (mobile, otp) => {
   return sendSMS(mobile, message);
 };
 
-module.exports = { sendSMS, sendOTP };
+module.exports = { sendSMS, sendOTP, normalizePhoneNumber };

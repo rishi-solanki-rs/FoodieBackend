@@ -297,6 +297,7 @@ const RiderWallet = require('../models/RiderWallet');
 const RestaurantWallet = require('../models/RestaurantWallet');
 const AdminCommissionWallet = require('../models/AdminCommissionWallet');
 const PaymentTransaction = require('../models/PaymentTransaction');
+const { generateBills } = require('./billingService');
 const mongoose = require('mongoose');
 const BASE_DELIVERY_FEE = 30;          // ₹30 base delivery fee
 const BASE_DELIVERY_DISTANCE_KM = 2;   // Free up to 2km
@@ -591,6 +592,14 @@ async function processCODDelivery(orderId) {
       await session.commitTransaction();
       session.endSession();
 
+      // Generate billing records outside the Mongo transaction (audit/receipt
+      // only — wallet credits are already committed above).
+      try {
+        await generateBills(fullOrder._id);
+      } catch (billErr) {
+        console.error('[paymentService] billingService.generateBills failed for COD order', fullOrder._id, billErr.message);
+      }
+
       return {
         success: true,
         riderFrozen: wasFrozen,
@@ -805,6 +814,13 @@ async function processOnlineDelivery(orderId) {
 
       await session.commitTransaction();
       session.endSession();
+
+      // Generate billing records outside the Mongo transaction.
+      try {
+        await generateBills(fullOrder._id);
+      } catch (billErr) {
+        console.error('[paymentService] billingService.generateBills failed for online order', fullOrder._id, billErr.message);
+      }
 
       return {
         success: true,
