@@ -105,6 +105,7 @@ exports.formatProductForUser = (product) => {
     description: product.description,
     image: product.image,
     basePrice: product.basePrice,
+    unit: product.unit || "piece",
     isVeg: product.isVeg,
     available: product.available,
     variations: product.variations || [],

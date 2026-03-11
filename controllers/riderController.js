@@ -567,7 +567,7 @@ exports.onboardRider = async (req, res) => {
       if (!location) location = existing.currentLocation;
     }
     const processedDocuments = {
-      ...(reuseRejected ? existing.documents || {} : {}),
+      ...(reuseRejected ? ((existing.toObject && existing.toObject().documents) || {}) : {}),
       ...(documents || {}),
     };
     if (req.files) {
@@ -1135,7 +1135,11 @@ exports.updateDocuments = async (req, res) => {
     const rider = await Rider.findOne({ user: req.user._id });
     if (!rider) return res.status(404).json({ message: 'Rider profile not found' });
 
-    const updatedDocuments = deepMergeObjects(rider.documents || {}, documents || {});
+    // Use .toObject() to get a plain JS object — spreading a Mongoose subdocument
+    // copies schema paths that were never stored (value: undefined) which causes
+    // Mongoose to throw "Cast to Object failed for value undefined" on .save()
+    const existingDocs = (rider.toObject().documents) || {};
+    const updatedDocuments = deepMergeObjects(existingDocs, documents || {});
 
     if (req.files) {
       if (req.files.licenseFrontImage && req.files.licenseFrontImage[0]) {

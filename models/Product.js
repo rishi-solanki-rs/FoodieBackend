@@ -28,6 +28,14 @@ const productSchema = new mongoose.Schema(
     // Serving size / unit quantity label  e.g. "250ml", "1 plate", "500g"
     quantity: { type: String, trim: true, default: '' },
 
+    // Measurement unit for the product (e.g. kg, gram, litre, ml, piece, packet, dozen)
+    // Used to display the unit alongside the product quantity
+    unit: {
+      type: String,
+      enum: ["kg", "gram", "litre", "ml", "piece", "packet", "dozen"],
+      default: "piece",
+    },
+
     // ── Pricing (set by restaurant) ────────────────────────────────────────
     basePrice: { type: Number, required: true, min: 0 },
 
@@ -114,11 +122,17 @@ const productSchema = new mongoose.Schema(
         variations: [
           {
             name: {
-              en: { type: String, required: true },
+              en: { type: String },
               de: { type: String },
               ar: { type: String },
             },
+            quantity: { type: Number, min: 0 },
+            unit: {
+              type: String,
+              enum: ["kg", "gram", "litre", "ml", "piece", "packet", "dozen"],
+            },
             price: { type: Number, required: true, min: 0 },
+            stock: { type: Number, min: 0, default: null },
           },
         ],
         addOns: [
@@ -140,12 +154,23 @@ const productSchema = new mongoose.Schema(
     // ── Variations & add-ons ───────────────────────────────────────────────
     variations: [
       {
+        // name is used for label-style variations (e.g. "Small", "Large").
+        // For quantity-based variations (e.g. 250g, 1kg), use quantity + unit instead.
         name: {
-          en: { type: String, required: true },
+          en: { type: String },
           de: { type: String },
           ar: { type: String },
         },
+        // Numeric quantity for this variation (e.g. 250, 500, 1)
+        quantity: { type: Number, min: 0 },
+        // Unit of measurement for this variation (e.g. "gram", "kg", "ml")
+        unit: {
+          type: String,
+          enum: ["kg", "gram", "litre", "ml", "piece", "packet", "dozen"],
+        },
         price: { type: Number, required: true, min: 0 },
+        // Stock count for this specific variation (null = unlimited)
+        stock: { type: Number, min: 0, default: null },
       },
     ],
     addOns: [

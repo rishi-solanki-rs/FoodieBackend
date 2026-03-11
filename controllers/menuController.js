@@ -72,6 +72,7 @@ exports.addFoodItem = async (req, res) => {
       basePrice,
       gstPercent,
       quantity,    // Serving size label e.g. "250ml", "1 plate"
+      unit,        // Measurement unit e.g. kg, gram, litre, ml, piece, packet, dozen
       hsnCode,     // HSN code for GST compliance
       packagingCharge,  // Packaging charge per item
       packagingGstPercent, // GST on packaging
@@ -104,12 +105,13 @@ exports.addFoodItem = async (req, res) => {
     if (Array.isArray(normalizedVariations)) {
       normalizedVariations = normalizedVariations.filter((variation) => {
         if (!variation) return false;
-        const varName = variation.name;
-        if (!varName) return false;
-        if (typeof varName === 'string' && !varName.trim()) return false;
-        if (typeof varName === 'object' && !varName.en && !varName.de && !varName.ar) return false;
         if (typeof variation.price !== 'number' || variation.price < 0) return false;
-        return true;
+        const varName = variation.name;
+        const hasName = varName &&
+          (typeof varName === 'string' ? varName.trim() :
+            typeof varName === 'object' ? (varName.en || varName.de || varName.ar) : false);
+        const hasQuantity = typeof variation.quantity === 'number' && variation.quantity >= 0;
+        return hasName || hasQuantity;
       });
     }
     let normalizedAddOns = normalizeNamedList(parsedAddOns || addOns) || [];
@@ -141,6 +143,7 @@ exports.addFoodItem = async (req, res) => {
       basePrice,
       gstPercent: finalGst,
       quantity: quantity ? String(quantity).trim() : '',
+      unit: unit || undefined,
       hsnCode: hsnCode ? String(hsnCode).trim() : '',
       image,
       variations: normalizedVariations,
@@ -239,6 +242,7 @@ exports.getMenu = async (req, res) => {
           description: p.description ? p.description.en || p.description : "",
           image: p.image,
           basePrice: p.basePrice,
+          unit: p.unit || "piece",
           variations: p.variations,
           addOns: p.addOns,
           available: p.available,
@@ -313,6 +317,7 @@ exports.bulkUpdateProducts = async (req, res) => {
         "addOns",
         "variations",
         "image",
+        "unit",
         "category",
         "isVeg",
       ];
@@ -335,12 +340,13 @@ exports.bulkUpdateProducts = async (req, res) => {
               if (Array.isArray(normalizedVars)) {
                 normalizedVars = normalizedVars.filter((variation) => {
                   if (!variation) return false;
-                  const varName = variation.name;
-                  if (!varName) return false;
-                  if (typeof varName === 'string' && !varName.trim()) return false;
-                  if (typeof varName === 'object' && !varName.en && !varName.de && !varName.ar) return false;
                   if (typeof variation.price !== 'number' || variation.price < 0) return false;
-                  return true;
+                  const varName = variation.name;
+                  const hasName = varName &&
+                    (typeof varName === 'string' ? varName.trim() :
+                      typeof varName === 'object' ? (varName.en || varName.de || varName.ar) : false);
+                  const hasQuantity = typeof variation.quantity === 'number' && variation.quantity >= 0;
+                  return hasName || hasQuantity;
                 });
               }
               pendingUpdate.variations = normalizedVars;
@@ -384,12 +390,13 @@ exports.bulkUpdateProducts = async (req, res) => {
             if (Array.isArray(normalizedVars)) {
               normalizedVars = normalizedVars.filter((variation) => {
                 if (!variation) return false;
-                const varName = variation.name;
-                if (!varName) return false;
-                if (typeof varName === 'string' && !varName.trim()) return false;
-                if (typeof varName === 'object' && !varName.en && !varName.de && !varName.ar) return false;
                 if (typeof variation.price !== 'number' || variation.price < 0) return false;
-                return true;
+                const varName = variation.name;
+                const hasName = varName &&
+                  (typeof varName === 'string' ? varName.trim() :
+                    typeof varName === 'object' ? (varName.en || varName.de || varName.ar) : false);
+                const hasQuantity = typeof variation.quantity === 'number' && variation.quantity >= 0;
+                return hasName || hasQuantity;
               });
             }
             product.variations = normalizedVars;
@@ -547,6 +554,7 @@ exports.editProduct = async (req, res) => {
       "name",
       "description",
       "image",
+      "unit",
       "variations",
       "addOns",
       "seasonal",

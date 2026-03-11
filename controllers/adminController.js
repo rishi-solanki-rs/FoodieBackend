@@ -262,7 +262,7 @@ exports.getRestaurantMenuAdmin = async (req, res) => {
       filter.pendingUpdate = { $exists: false };
     }
     const products = await Product.find(filter)
-      .select("_id name description basePrice isApproved approvalNotes approvedAt pendingUpdate pendingUpdateAt restaurant category available isVeg image seasonal seasonTag variations addOns createdAt quantity hsnCode gstPercent adminCommissionPercent")
+      .select("_id name description basePrice isApproved approvalNotes approvedAt pendingUpdate pendingUpdateAt restaurant category available isVeg image seasonal seasonTag variations addOns createdAt quantity unit hsnCode gstPercent adminCommissionPercent")
       .populate('category', 'name description image isActive')
       .sort({ createdAt: -1 })
       .lean();
@@ -304,17 +304,20 @@ exports.approveRestaurantMenu = async (req, res) => {
           if (pending.isVeg !== undefined) product.isVeg = pending.isVeg;
           if (pending.seasonal !== undefined) product.seasonal = pending.seasonal;
           if (pending.seasonTag !== undefined) product.seasonTag = pending.seasonTag;
+          if (pending.unit !== undefined) product.unit = pending.unit;
           if (pending.category !== undefined) product.category = pending.category;
           if (pending.variations !== undefined) {
             let normalized = normalizeNamedList(pending.variations) || [];
             if (Array.isArray(normalized)) {
               normalized = normalized.filter((v) => {
-                if (!v || !v.name) return false;
-                const name = v.name;
-                if (typeof name === 'string' && !name.trim()) return false;
-                if (typeof name === 'object' && !name.en && !name.de && !name.ar) return false;
+                if (!v) return false;
                 if (typeof v.price !== 'number' || v.price < 0) return false;
-                return true;
+                const name = v.name;
+                const hasName = name &&
+                  (typeof name === 'string' ? name.trim() :
+                    typeof name === 'object' ? (name.en || name.de || name.ar) : false);
+                const hasQuantity = typeof v.quantity === 'number' && v.quantity >= 0;
+                return hasName || hasQuantity;
               });
             }
             product.variations = normalized;
