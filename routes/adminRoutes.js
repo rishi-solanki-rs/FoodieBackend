@@ -329,6 +329,15 @@ router.delete(
   admin,
   adminController.deleteMenuItemAdmin
 );
+
+// Create menu item for a specific restaurant (admin only)
+router.post(
+  "/restaurants/:restaurantId/menu",
+  protect,
+  admin,
+  adminController.createMenuItemForRestaurant
+);
+
 router.post("/banner", protect, admin, upload.single('image'), addBanner);
 router.get("/banner", protect, admin, getAllBanners);
 router.get("/banner/:id", protect, admin, getBannerById);

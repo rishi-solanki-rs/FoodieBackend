@@ -749,6 +749,153 @@ exports.deleteMenuItemAdmin = async (req, res) => {
     res.status(500).json({ message: error.message });
   }
 };
+
+/**
+ * POST /api/admin/restaurants/:restaurantId/menu
+ * Admin only — create a menu item for a specific restaurant
+ */
+exports.createMenuItemForRestaurant = async (req, res) => {
+  try {
+    const { restaurantId } = req.params;
+    const FoodCategory = require("../models/FoodCategory");
+    
+    // Check if restaurant exists
+    const restaurant = await Restaurant.findById(restaurantId);
+    if (!restaurant) {
+      return res.status(404).json({ message: "Restaurant not found" });
+    }
+
+    const {
+      categoryId,
+      name,
+      description,
+      basePrice,
+      gstPercent,
+      quantity,
+      hsnCode,
+      isVeg,
+      seasonal,
+      seasonTag,
+      variations,
+      addOns,
+      image,
+      adminCommissionPercent,
+      restaurantCommissionPercent,
+      packagingCharge,
+      packagingGstPercent,
+    } = req.body;
+
+    // Validate category
+    const category = await FoodCategory.findOne({ _id: categoryId, isActive: true });
+    if (!category) {
+      return res.status(404).json({ message: "Category not found. Please select a valid category." });
+    }
+
+    // Normalize name (required)
+    const normalizedName = normalizeTranslation(name);
+    if (!normalizedName || !normalizedName.en) {
+      return res.status(400).json({ message: "Product name is required" });
+    }
+
+    // Normalize variations
+    let normalizedVariations = normalizeNamedList(variations) || [];
+    if (Array.isArray(normalizedVariations)) {
+      normalizedVariations = normalizedVariations.filter((variation) => {
+        if (!variation) return false;
+        const varName = variation.name;
+        if (!varName) return false;
+        if (typeof varName === 'string' && !varName.trim()) return false;
+        if (typeof varName === 'object' && !varName.en && !varName.de && !varName.ar) return false;
+        if (typeof variation.price !== 'number' || variation.price < 0) return false;
+        return true;
+      });
+    }
+
+    // Normalize addOns
+    let normalizedAddOns = normalizeNamedList(addOns) || [];
+    if (Array.isArray(normalizedAddOns)) {
+      normalizedAddOns = normalizedAddOns.filter((addOn) => {
+        if (!addOn) return false;
+        const addOnName = addOn.name;
+        if (!addOnName) return false;
+        if (typeof addOnName === 'string' && !addOnName.trim()) return false;
+        if (typeof addOnName === 'object' && !addOnName.en && !addOnName.de && !addOnName.ar) return false;
+        if (typeof addOn.price !== 'number' || addOn.price < 0) return false;
+        return true;
+      });
+    }
+
+    // Validate GST
+    const gstSlabs = [0, 5, 12, 18];
+    const parsedGst = Number(gstPercent);
+    const finalGst = gstSlabs.includes(parsedGst) ? parsedGst : 5;
+
+    // Validate packaging GST
+    const parsedPackagingGst = packagingGstPercent !== undefined ? Number(packagingGstPercent) : 0;
+    const finalPackagingGst = gstSlabs.includes(parsedPackagingGst) ? parsedPackagingGst : 0;
+
+    // Create product with payment fields
+    const productData = {
+      restaurant: restaurantId,
+      category: categoryId,
+      name: normalizedName,
+      description: normalizeTranslation(description),
+      basePrice: Number(basePrice),
+      gstPercent: finalGst,
+      quantity: quantity ? String(quantity).trim() : '',
+      hsnCode: hsnCode ? String(hsnCode).trim() : '',
+      image: image || undefined,
+      variations: normalizedVariations,
+      addOns: normalizedAddOns,
+      isVeg: isVeg !== undefined ? !!isVeg : true,
+      seasonal: seasonal !== undefined ? !!seasonal : false,
+      seasonTag: seasonal && seasonTag ? String(seasonTag).trim() : '',
+      isApproved: false, // Admin-created items still need approval
+    };
+
+    // Add payment fields if provided
+    if (adminCommissionPercent !== undefined && adminCommissionPercent !== null && adminCommissionPercent !== '') {
+      const commission = Number(adminCommissionPercent);
+      if (commission >= 0 && commission <= 100) {
+        productData.adminCommissionPercent = commission;
+      }
+    }
+
+    if (restaurantCommissionPercent !== undefined && restaurantCommissionPercent !== null && restaurantCommissionPercent !== '') {
+      const commission = Number(restaurantCommissionPercent);
+      if (commission >= 0 && commission <= 100) {
+        productData.restaurantCommissionPercent = commission;
+      }
+    }
+
+    if (packagingCharge !== undefined && packagingCharge !== null && packagingCharge !== '') {
+      const charge = Number(packagingCharge);
+      if (charge >= 0) {
+        productData.packagingCharge = charge;
+        productData.packagingGstPercent = finalPackagingGst;
+      }
+    }
+
+    const product = await Product.create(productData);
+
+    // Add product to restaurant's product array
+    await Restaurant.findByIdAndUpdate(
+      restaurantId,
+      { $addToSet: { product: product._id } },
+      { new: true }
+    );
+
+    res.status(201).json({
+      message: "Menu item created successfully. Awaiting approval.",
+      product,
+      status: "pending_approval"
+    });
+  } catch (error) {
+    console.error("Error creating menu item:", error);
+    res.status(400).json({ message: error.message });
+  }
+};
+
 exports.getAllPendingMenuItems = async (req, res) => {
   try {
     const { page = 1, limit = 20, restaurantId, sortBy = "createdAt" } = req.query;

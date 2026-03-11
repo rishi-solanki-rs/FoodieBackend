@@ -53,12 +53,15 @@ const getOwnerRestaurant = async (userId) => {
  */
 exports.getCategories = async (req, res) => {
   try {
-    const categories = await FoodCategory.find({ isActive: true }).sort({ sortOrder: 1, name: 1 });
+    const categories = await FoodCategory.find({ isActive: true }).sort({ sortOrder: 1, name: 1 }).lean();
     return res.status(200).json({ success: true, categories });
   } catch (error) {
+    console.error('Error fetching categories:', error);
     return res.status(500).json({ success: false, message: error.message });
   }
 };
+//   }
+// };
 exports.addFoodItem = async (req, res) => {
   try {
     const file = req.files && req.files.image ? req.files.image[0] : null;
@@ -70,7 +73,9 @@ exports.addFoodItem = async (req, res) => {
       gstPercent,
       quantity,    // Serving size label e.g. "250ml", "1 plate"
       hsnCode,     // HSN code for GST compliance
-      // NOTE: `discount` is intentionally NOT destructured — admin-only field
+      packagingCharge,  // Packaging charge per item
+      packagingGstPercent, // GST on packaging
+      // NOTE: `discount`, `adminCommissionPercent`, `restaurantCommissionPercent` are admin-only fields
       variations,
       addOns,
     } = req.body;
@@ -122,7 +127,13 @@ exports.addFoodItem = async (req, res) => {
     const gstSlabs = [0, 5, 12, 18];
     const parsedGst = Number(gstPercent);
     const finalGst = gstSlabs.includes(parsedGst) ? parsedGst : 5;
-    const product = await Product.create({
+
+    // Validate packaging GST
+    const parsedPackagingGst = packagingGstPercent !== undefined ? Number(packagingGstPercent) : 0;
+    const finalPackagingGst = gstSlabs.includes(parsedPackagingGst) ? parsedPackagingGst : 0;
+
+    // Prepare product data
+    const productData = {
       restaurant: restaurant._id,
       category: categoryId,
       name: normalizedName,
@@ -136,7 +147,18 @@ exports.addFoodItem = async (req, res) => {
       addOns: normalizedAddOns,
       isApproved: false,
       // discount is NOT set here — only admin can set it
-    });
+    };
+
+    // Add packaging fields if provided
+    if (packagingCharge !== undefined && packagingCharge !== null && packagingCharge !== '') {
+      const charge = Number(packagingCharge);
+      if (charge >= 0) {
+        productData.packagingCharge = charge;
+        productData.packagingGstPercent = finalPackagingGst;
+      }
+    }
+
+    const product = await Product.create(productData);
     await Restaurant.findByIdAndUpdate(
       restaurant._id,
       { $addToSet: { product: product._id } }, // $addToSet prevents duplicates

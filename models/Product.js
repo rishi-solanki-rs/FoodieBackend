@@ -44,6 +44,29 @@ const productSchema = new mongoose.Schema(
       default: null,
     },
 
+    // Restaurant commission percent for this item (what restaurant earns)
+    // If null/undefined, order flow falls back to default calculation
+    restaurantCommissionPercent: {
+      type: Number,
+      min: 0,
+      max: 100,
+      default: null,
+    },
+
+    // Packaging charge per item (flat amount)
+    packagingCharge: {
+      type: Number,
+      min: 0,
+      default: 0,
+    },
+
+    // GST percent on packaging charge (0 / 5 / 12 / 18 %)
+    packagingGstPercent: {
+      type: Number,
+      enum: [0, 5, 12, 18],
+      default: 0,
+    },
+
     // GST slab — set by restaurant when listing (0 / 5 / 12 / 18 %)
     gstPercent: {
       type: Number,

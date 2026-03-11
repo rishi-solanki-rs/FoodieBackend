@@ -14,11 +14,16 @@ const {
 } = require("../controllers/menuController");
 const { upload } = require("../utils/upload");
 
+// IMPORTANT: Specific routes must come BEFORE parameterized routes
+// Public/Restaurant: Get all active admin-managed food categories (for dropdown when adding products)
+router.get("/categories", getCategories);
+router.get("/categories/list", getCategories);
+
+// Public: Seasonal menu
+router.get("/seasonal/:restaurantId", getSeasonalMenu);
+
 // Public: Get full menu for a restaurant
 router.get("/:restaurantId", getMenu);
-
-// Public/Restaurant: Get all active admin-managed food categories (for dropdown when adding products)
-router.get("/categories/list", getCategories);
 
 // Restaurant: Add a food item (category must be from admin category list)
 router.post(
@@ -55,8 +60,5 @@ router.put("/item/:id/availability", protect, restaurantOwner, toggleProductAvai
 
 // Restaurant: Bulk update prices
 router.put("/bulk/prices", protect, restaurantOwner, bulkUpdatePrices);
-
-// Public: Seasonal menu
-router.get("/seasonal/:restaurantId", getSeasonalMenu);
 
 module.exports = router;
