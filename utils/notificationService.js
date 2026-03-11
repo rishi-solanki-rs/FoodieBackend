@@ -8,7 +8,10 @@ exports.sendNotification = async (userId, title, message, data = {}) => {
       console.warn("⚠️ sendNotification: userId is required (undefined/null provided)");
       return false;
     }
-    const userIdStr = userId.toString ? userId.toString() : String(userId);
+    
+    // Extract _id if an object is passed (e.g., {_id: ObjectId, name: 'User'})
+    const actualUserId = userId._id ? userId._id : userId;
+    const userIdStr = actualUserId.toString ? actualUserId.toString() : String(actualUserId);
     try {
       socketService.emitToUser(userIdStr, "notification:new", {
         title,

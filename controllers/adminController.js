@@ -6,6 +6,17 @@ const Product = require("../models/Product");
 const WalletTransaction = require("../models/WalletTransaction");
 const { sendNotification } = require("../utils/notificationService");
 const { getPaginationParams } = require('../utils/pagination');
+const { getFileUrl } = require("../utils/upload");
+
+const parseIfString = (value) => {
+  if (typeof value !== "string") return value;
+  try {
+    return JSON.parse(value);
+  } catch (error) {
+    return value;
+  }
+};
+
 const normalizeTranslation = (value) => {
   if (!value) return null;
   if (typeof value === "string") return { en: value };
@@ -768,25 +779,30 @@ exports.createMenuItemForRestaurant = async (req, res) => {
       return res.status(404).json({ message: "Restaurant not found" });
     }
 
+    // Parse JSON strings from FormData
     const {
       categoryId,
-      name,
-      description,
-      basePrice,
-      gstPercent,
-      quantity,
-      hsnCode,
-      isVeg,
-      seasonal,
-      seasonTag,
-      variations,
-      addOns,
-      image,
       adminCommissionPercent,
       restaurantCommissionPercent,
       packagingCharge,
       packagingGstPercent,
     } = req.body;
+
+    const name = parseIfString(req.body.name);
+    const description = parseIfString(req.body.description);
+    const basePrice = req.body.basePrice;
+    const gstPercent = req.body.gstPercent;
+    const quantity = req.body.quantity;
+    const unit = req.body.unit;
+    const hsnCode = req.body.hsnCode;
+    const seasonal = req.body.seasonal === 'true' || req.body.seasonal === true;
+    const seasonTag = req.body.seasonTag;
+    const variations = parseIfString(req.body.variations);
+    const addOns = parseIfString(req.body.addOns);
+
+    // Handle uploaded image
+    const file = req.files && req.files.image ? req.files.image[0] : null;
+    const imageUrl = file ? getFileUrl(file) : null;
 
     // Validate category
     const category = await FoodCategory.findOne({ _id: categoryId, isActive: true });
@@ -814,7 +830,7 @@ exports.createMenuItemForRestaurant = async (req, res) => {
       });
     }
 
-    // Normalize addOns
+    // Normalize addOns and handle images
     let normalizedAddOns = normalizeNamedList(addOns) || [];
     if (Array.isArray(normalizedAddOns)) {
       normalizedAddOns = normalizedAddOns.filter((addOn) => {
@@ -826,6 +842,15 @@ exports.createMenuItemForRestaurant = async (req, res) => {
         if (typeof addOn.price !== 'number' || addOn.price < 0) return false;
         return true;
       });
+
+      // Handle add-on images
+      if (req.files && req.files.addOnImages && Array.isArray(req.files.addOnImages)) {
+        req.files.addOnImages.forEach((fileItem, index) => {
+          if (normalizedAddOns[index]) {
+            normalizedAddOns[index].image = getFileUrl(fileItem);
+          }
+        });
+      }
     }
 
     // Validate GST
@@ -846,12 +871,12 @@ exports.createMenuItemForRestaurant = async (req, res) => {
       basePrice: Number(basePrice),
       gstPercent: finalGst,
       quantity: quantity ? String(quantity).trim() : '',
+      unit: unit || 'piece',
       hsnCode: hsnCode ? String(hsnCode).trim() : '',
-      image: image || undefined,
+      image: imageUrl || undefined,
       variations: normalizedVariations,
       addOns: normalizedAddOns,
-      isVeg: isVeg !== undefined ? !!isVeg : true,
-      seasonal: seasonal !== undefined ? !!seasonal : false,
+      seasonal: seasonal,
       seasonTag: seasonal && seasonTag ? String(seasonTag).trim() : '',
       isApproved: false, // Admin-created items still need approval
     };

@@ -100,7 +100,7 @@ exports.findAndNotifyRider = async (orderId) => {
 
             socketService.emitToRider(rider.user.toString(), 'rider:new_order_request', requestData);
             sendNotification(
-                rider.user,
+                rider.user._id || rider.user,
                 '🚀 New Delivery Request!',
                 `Earn ₹${riderEarning} — ${restaurant.name} → ${order.deliveryAddress?.area || 'Customer'}`,
                 { orderId: order._id.toString(), requestId: request._id.toString(), type: 'dispatch_request' }
