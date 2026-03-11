@@ -55,6 +55,13 @@ const orderSchema = new mongoose.Schema(
       gstPercentOnFood: { type: Number, default: 0 },
       gstPercentOnPackaging: { type: Number, default: 0 },
       gstPercentOnDiscount: { type: Number, default: 0 },
+      // Settlement clarity fields (v2)
+      restaurantGross: { type: Number, default: 0 },        // itemTotal + packaging
+      restaurantNet: { type: Number, default: 0 },          // restaurantGross - adminCommission
+      riderDeliveryEarning: { type: Number, default: 0 },   // delivery fee credited to rider
+      riderIncentive: { type: Number, default: 0 },         // incentive bonus credited to rider
+      riderPlatformFeeShare: { type: Number, default: 0 },  // platform fee portion to rider
+      adminPlatformFeeShare: { type: Number, default: 0 },  // platform fee portion to admin
       computedVersion: { type: String, default: "settlement-v1" },
       computedAt: { type: Date, default: Date.now },
     },
@@ -165,6 +172,14 @@ const orderSchema = new mongoose.Schema(
       earnedAt: { type: Date }
     },
     
+    // ── Canonical settlement fields (v2) ─────────────────────────────────────
+    // Single source of truth for restaurant net earning:
+    //   (itemTotal + packaging) - adminCommission
+    restaurantEarning: { type: Number, default: 0 },
+
+    // Admin commission snapshotted at order placement (audit trail)
+    adminCommissionAtOrder: { type: Number, default: 0 },
+
     // Legacy fields - kept for backward compatibility
     // Use riderEarnings.totalRiderEarning for new code
     riderEarning: { type: Number, default: 0 },

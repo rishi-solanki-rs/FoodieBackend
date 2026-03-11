@@ -327,44 +327,71 @@ function calculateDeliveryCharges(distanceKm) {
 
 function getSettlementSnapshot(order, restaurant, distanceInfo) {
   const paymentBreakdown = order?.paymentBreakdown || {};
+
+  // ── Item total & packaging ────────────────────────────────────────────────
   const itemTotal = Number.isFinite(Number(paymentBreakdown.itemTotal))
     ? Number(paymentBreakdown.itemTotal)
     : Number(order?.itemTotal || 0);
   const packagingCharge = Number.isFinite(Number(paymentBreakdown.packagingCharge))
     ? Number(paymentBreakdown.packagingCharge)
     : Number(order?.packaging || 0);
+
+  // ── Admin commission ──────────────────────────────────────────────────────
+  // Prefer the canonical snapshot field set at order placement.
+  // Fallback chain: adminCommissionAtOrder → adminCommission → recalculate
   const commissionPercent = Number(restaurant?.adminCommission || DEFAULT_COMMISSION_PERCENT);
-  const commissionAmount = Number.isFinite(Number(order?.adminCommission))
-    ? Number(order.adminCommission)
-    : Math.round((Math.max(0, itemTotal + packagingCharge) * (Math.max(0, commissionPercent) / 100)) * 100) / 100;
+  const commissionAmount = Number.isFinite(Number(order?.adminCommissionAtOrder))
+    ? Number(order.adminCommissionAtOrder)
+    : Number.isFinite(Number(order?.adminCommission))
+      ? Number(order.adminCommission)
+      : Math.round((Math.max(0, itemTotal + packagingCharge) * (Math.max(0, commissionPercent) / 100)) * 100) / 100;
 
-  // Restaurant earning formula:
-  // (item total + packaging) - platform commission
-  const restaurantNet = Math.max(0, Math.round((itemTotal + packagingCharge - commissionAmount) * 100) / 100);
+  // ── Restaurant net earning ────────────────────────────────────────────────
+  // Formula: (itemTotal + packaging) - adminCommission
+  // GST, deliveryFee, and platformFee are NOT restaurant earnings
+  const restaurantGross = itemTotal + packagingCharge;
+  const restaurantNet = Math.max(0, Math.round((restaurantGross - commissionAmount) * 100) / 100);
 
+  // ── Delivery fee ──────────────────────────────────────────────────────────
   const settlementDeliveryFee = Number.isFinite(Number(order?.deliveryFee))
     ? Number(order.deliveryFee)
     : Number(distanceInfo?.totalDeliveryFee || 0);
-  const riderIncentive = Number.isFinite(Number(order?.riderIncentive))
-    ? Number(order.riderIncentive)
-    : Number(order?.riderEarnings?.incentive || 0);
 
-  // Rider earning formula:
-  // delivery fee + rider incentive
-  const riderEarning = Math.max(0, Math.round((settlementDeliveryFee + riderIncentive) * 100) / 100);
+  // ── Rider incentive ───────────────────────────────────────────────────────
+  // Prefer the structured riderEarnings object, fallback to legacy field
+  const riderIncentive = Number.isFinite(Number(order?.riderEarnings?.incentive))
+    ? Number(order.riderEarnings.incentive)
+    : Number.isFinite(Number(order?.riderIncentive))
+      ? Number(order.riderIncentive)
+      : 0;
+
+  // ── Platform fee distribution ─────────────────────────────────────────────
+  // By default rider receives 100% of the platform fee.
+  // Admin receives none (it comes from the commission instead).
+  const platformFee = Math.max(0, Number(order?.platformFee || 0));
+  const riderPlatformFeeShare = platformFee;
+  const adminPlatformFeeShare = 0;
+
+  // ── Rider earning formula ─────────────────────────────────────────────────
+  // totalRiderEarning = deliveryFee + platformFeeShare + incentive
+  // Tip is handled separately during wallet update (not included here)
+  const riderEarning = Math.max(0, Math.round((settlementDeliveryFee + riderPlatformFeeShare + riderIncentive) * 100) / 100);
 
   return {
     orderAmount: Number(order?.totalAmount || 0),
     itemTotal: Math.max(0, itemTotal),
     packagingCharge: Math.max(0, packagingCharge),
+    restaurantGross: Math.max(0, restaurantGross),
     commissionPercent,
     commissionAmount: Math.max(0, commissionAmount),
     settlementDeliveryFee: Math.max(0, settlementDeliveryFee),
     riderIncentive: Math.max(0, riderIncentive),
+    riderPlatformFeeShare: Math.max(0, riderPlatformFeeShare),
+    adminPlatformFeeShare: Math.max(0, adminPlatformFeeShare),
     riderEarning,
     restaurantNet,
     tax: Math.max(0, Number(order?.tax || 0)),
-    platformFee: Math.max(0, Number(order?.platformFee || 0)),
+    platformFee,
     discount: Math.max(0, Number(order?.discount || 0)),
   };
 }
@@ -471,6 +498,8 @@ async function processCODDelivery(orderId) {
         commissionAmount,
         settlementDeliveryFee,
         riderIncentive,
+        riderPlatformFeeShare,
+        adminPlatformFeeShare,
         riderEarning,
         restaurantNet,
         tax,
@@ -478,18 +507,22 @@ async function processCODDelivery(orderId) {
         discount,
       } = settlement;
 
+      // Tip is a separate credit to the rider (not part of riderEarning base)
+      const tipAmount = Math.max(0, Number(fullOrder.tip || 0));
+      const riderTotalCredit = Math.round((riderEarning + tipAmount) * 100) / 100;
+
       riderWallet.cashInHand += orderAmount;
       const wasFrozen = riderWallet.checkAndFreeze();
-      riderWallet.totalEarnings += riderEarning;
-      riderWallet.availableBalance += riderEarning;
+      riderWallet.totalEarnings += riderTotalCredit;
+      riderWallet.availableBalance += riderTotalCredit;
       await riderWallet.save({ session });
 
       await Rider.updateOne(
         { _id: fullOrder.rider._id },
         {
           $inc: {
-            totalEarnings: riderEarning,
-            currentBalance: riderEarning,
+            totalEarnings: riderTotalCredit,
+            currentBalance: riderTotalCredit,
           },
         },
         { session },
@@ -514,18 +547,32 @@ async function processCODDelivery(orderId) {
       if (!adminWallet) {
         adminWallet = await AdminCommissionWallet.create([{}], { session }).then((docs) => docs[0]);
       }
-      adminWallet.balance += commissionAmount;
-      adminWallet.totalCommission += commissionAmount;
+      adminWallet.balance += commissionAmount + adminPlatformFeeShare;
+      adminWallet.totalCommission += commissionAmount + adminPlatformFeeShare;
       adminWallet.commissionFromRestaurants += commissionAmount;
+      adminWallet.commissionFromDelivery += adminPlatformFeeShare;
       adminWallet.lastUpdated = new Date();
       await adminWallet.save({ session });
 
       fullOrder.cashCollected = orderAmount;
       fullOrder.cashCollectedAt = new Date();
+      // Canonical fields (v2)
+      fullOrder.restaurantEarning = restaurantNet;
+      fullOrder.adminCommissionAtOrder = commissionAmount;
+      // Legacy fields (backward compat)
       fullOrder.riderEarning = riderEarning;
       fullOrder.riderIncentive = riderIncentive;
       fullOrder.adminCommission = commissionAmount;
       fullOrder.restaurantCommission = restaurantNet;
+      // Update structured riderEarnings object with settlement-confirmed values
+      fullOrder.riderEarnings = {
+        deliveryCharge: settlementDeliveryFee,
+        platformFee: riderPlatformFeeShare,
+        incentive: riderIncentive,
+        totalRiderEarning: riderEarning,
+        incentivePercentAtCompletion: fullOrder.riderEarnings?.incentivePercentAtCompletion || 0,
+        earnedAt: new Date(),
+      };
       fullOrder.settlementStatus = 'processed';
       fullOrder.settlementProcessedAt = new Date();
       await fullOrder.save({ session });
@@ -549,8 +596,8 @@ async function processCODDelivery(orderId) {
             deliveryFee: settlementDeliveryFee,
             distanceSurcharge: distanceInfo.surcharge,
             restaurantNet,
-            riderEarning,
-            platformEarning: commissionAmount + platformFee,
+            riderEarning: riderTotalCredit,
+            platformEarning: commissionAmount + adminPlatformFeeShare,
             tax,
             discount,
           },
@@ -563,11 +610,14 @@ async function processCODDelivery(orderId) {
           restaurant: restaurant._id,
           user: fullOrder.customer,
           type: 'rider_earning_credit',
-          amount: riderEarning,
+          amount: riderTotalCredit,
           breakdown: {
-            deliveryFee: settlementDeliveryFee,
-            riderEarning,
-            platformEarning: 0,
+            deliveryCharge: settlementDeliveryFee,
+            platformFeeShare: riderPlatformFeeShare,
+            incentive: riderIncentive,
+            tip: tipAmount,
+            riderBaseEarning: riderEarning,
+            riderTotalCredit,
           },
           note: `Rider earning credited for delivered order`,
           status: 'completed',
@@ -608,7 +658,7 @@ async function processCODDelivery(orderId) {
           cashLimit: riderWallet.cashLimit,
           isFrozen: riderWallet.isFrozen,
           frozenReason: riderWallet.frozenReason,
-          riderEarning,
+          riderEarning: riderTotalCredit,
         },
         restaurantWallet: {
           balance: restaurantWallet.balance,
@@ -620,9 +670,12 @@ async function processCODDelivery(orderId) {
           packagingCharge,
           commissionAmount: commissionAmount.toFixed(2),
           deliveryFee: settlementDeliveryFee,
+          riderPlatformFeeShare,
           riderIncentive,
+          tipAmount,
           restaurantNet: restaurantNet.toFixed(2),
           riderEarning,
+          riderTotalCredit,
         }
       };
     } catch (txnError) {
@@ -699,6 +752,8 @@ async function processOnlineDelivery(orderId) {
         commissionAmount,
         settlementDeliveryFee,
         riderIncentive,
+        riderPlatformFeeShare,
+        adminPlatformFeeShare,
         riderEarning,
         restaurantNet,
         tax,
@@ -706,16 +761,20 @@ async function processOnlineDelivery(orderId) {
         discount,
       } = settlement;
 
-      riderWallet.totalEarnings += riderEarning;
-      riderWallet.availableBalance += riderEarning;
+      // Tip is a separate credit to the rider (not part of riderEarning base)
+      const tipAmount = Math.max(0, Number(fullOrder.tip || 0));
+      const riderTotalCredit = Math.round((riderEarning + tipAmount) * 100) / 100;
+
+      riderWallet.totalEarnings += riderTotalCredit;
+      riderWallet.availableBalance += riderTotalCredit;
       await riderWallet.save({ session });
 
       await Rider.updateOne(
         { _id: fullOrder.rider._id },
         {
           $inc: {
-            totalEarnings: riderEarning,
-            currentBalance: riderEarning,
+            totalEarnings: riderTotalCredit,
+            currentBalance: riderTotalCredit,
           },
         },
         { session },
@@ -740,16 +799,30 @@ async function processOnlineDelivery(orderId) {
       if (!adminWallet) {
         adminWallet = await AdminCommissionWallet.create([{}], { session }).then((docs) => docs[0]);
       }
-      adminWallet.balance += commissionAmount;
-      adminWallet.totalCommission += commissionAmount;
+      adminWallet.balance += commissionAmount + adminPlatformFeeShare;
+      adminWallet.totalCommission += commissionAmount + adminPlatformFeeShare;
       adminWallet.commissionFromRestaurants += commissionAmount;
+      adminWallet.commissionFromDelivery += adminPlatformFeeShare;
       adminWallet.lastUpdated = new Date();
       await adminWallet.save({ session });
 
+      // Canonical fields (v2)
+      fullOrder.restaurantEarning = restaurantNet;
+      fullOrder.adminCommissionAtOrder = commissionAmount;
+      // Legacy fields (backward compat)
       fullOrder.riderEarning = riderEarning;
       fullOrder.riderIncentive = riderIncentive;
       fullOrder.adminCommission = commissionAmount;
       fullOrder.restaurantCommission = restaurantNet;
+      // Update structured riderEarnings object with settlement-confirmed values
+      fullOrder.riderEarnings = {
+        deliveryCharge: settlementDeliveryFee,
+        platformFee: riderPlatformFeeShare,
+        incentive: riderIncentive,
+        totalRiderEarning: riderEarning,
+        incentivePercentAtCompletion: fullOrder.riderEarnings?.incentivePercentAtCompletion || 0,
+        earnedAt: new Date(),
+      };
       fullOrder.settlementStatus = 'processed';
       fullOrder.settlementProcessedAt = new Date();
       await fullOrder.save({ session });
@@ -773,8 +846,8 @@ async function processOnlineDelivery(orderId) {
             deliveryFee: settlementDeliveryFee,
             distanceSurcharge: distanceInfo.surcharge,
             restaurantNet,
-            riderEarning,
-            platformEarning: commissionAmount + platformFee,
+            riderEarning: riderTotalCredit,
+            platformEarning: commissionAmount + adminPlatformFeeShare,
             tax,
             discount,
           },
@@ -786,11 +859,14 @@ async function processOnlineDelivery(orderId) {
           restaurant: restaurant._id,
           user: fullOrder.customer,
           type: 'rider_earning_credit',
-          amount: riderEarning,
+          amount: riderTotalCredit,
           breakdown: {
-            deliveryFee: settlementDeliveryFee,
-            riderEarning,
-            platformEarning: 0,
+            deliveryCharge: settlementDeliveryFee,
+            platformFeeShare: riderPlatformFeeShare,
+            incentive: riderIncentive,
+            tip: tipAmount,
+            riderBaseEarning: riderEarning,
+            riderTotalCredit,
           },
           note: `Rider earning credited for delivered order`,
           status: 'completed',
@@ -830,8 +906,11 @@ async function processOnlineDelivery(orderId) {
           packagingCharge,
           commissionAmount,
           restaurantNet,
+          riderPlatformFeeShare,
           riderIncentive,
+          tipAmount,
           riderEarning,
+          riderTotalCredit,
         }
       };
     } catch (txnError) {

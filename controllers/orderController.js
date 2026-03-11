@@ -307,16 +307,35 @@ exports.placeOrder = async (req, res) => {
       };
     });
     adminCommission = Math.round(adminCommission * 100) / 100;
-    const settlementRestaurantPayable = Number(bill.paymentBreakdown?.finalPayableToRestaurant);
-    const restaurantCommission = Number.isFinite(settlementRestaurantPayable)
-      ? Math.round(settlementRestaurantPayable * 100) / 100
-      : Math.round((totalBeforeTip - adminCommission - bill.deliveryFee) * 100) / 100;
-    const riderCommission = bill.deliveryFee * 0.7;
-    // Rider incentive: % of item subtotal (product rates only, before GST/fees)
+
+    // ── Restaurant Net Earning ────────────────────────────────────────────────
+    // Formula: (itemTotal + packaging) - adminCommission
+    // GST, deliveryFee, and platformFee are NOT part of restaurant earnings
+    const restaurantGross = Math.round(((bill.itemTotal || 0) + (bill.packaging || 0)) * 100) / 100;
+    const restaurantNet = Math.max(0, Math.round((restaurantGross - adminCommission) * 100) / 100);
+
+    // ── Rider Earnings ───────────────────────────────────────────────────────
+    // Components: deliveryFee + platformFee share + incentive
+    // Tip is separate and credited to rider wallet at settlement
     const adminSettings = await AdminSetting.findOne().lean();
-    const incentivePercent = adminSettings?.payoutConfig?.riderIncentivePercent ?? 5;
-    const riderIncentive = Math.round((bill.itemTotal * (incentivePercent / 100)) * 100) / 100;
-    const riderEarning = Math.round((riderCommission + tipAmount + riderIncentive) * 100) / 100;
+    const payoutConfig = adminSettings?.payoutConfig || {};
+    const incentivePercent = payoutConfig.riderIncentivePercent ?? 5;
+
+    // Rider delivery charge = full delivery fee collected from customer
+    const riderDeliveryCharge = Math.round((bill.deliveryFee || 0) * 100) / 100;
+    // Platform fee: rider receives the full platform fee by default
+    const riderPlatformFeeShare = Math.round((bill.platformFee || 0) * 100) / 100;
+    // Incentive: % of item subtotal (before GST/fees)
+    const riderIncentiveAmount = Math.max(0, Math.round((bill.itemTotal * (incentivePercent / 100)) * 100) / 100);
+
+    const riderEarningsData = {
+      deliveryCharge: riderDeliveryCharge,
+      platformFee: riderPlatformFeeShare,
+      incentive: riderIncentiveAmount,
+      incentivePercentAtCompletion: incentivePercent,
+      totalRiderEarning: Math.max(0, Math.round((riderDeliveryCharge + riderPlatformFeeShare + riderIncentiveAmount) * 100) / 100),
+      earnedAt: new Date(),
+    };
     const pickupOtp = Math.floor(1000 + Math.random() * 9000).toString();
     const deliveryOtp = Math.floor(1000 + Math.random() * 9000).toString();
     const otpExpiry = 100 * 60 * 1000; // 100 minutes
@@ -338,7 +357,8 @@ exports.placeOrder = async (req, res) => {
       discount: bill.discount,
       couponCode: bill.appliedCoupon,
       totalAmount: bill.toPay,
-      paymentBreakdown: bill.paymentBreakdown || {
+      paymentBreakdown: {
+        ...(bill.paymentBreakdown || {}),
         itemTotal: bill.itemTotal,
         restaurantDiscount: bill.restaurantDiscount || 0,
         gstOnFood: bill.gstOnFood || 0,
@@ -347,16 +367,28 @@ exports.placeOrder = async (req, res) => {
         restaurantBillTotal: bill.restaurantBillTotal || 0,
         foodierDiscount: bill.foodierDiscount || bill.discount || 0,
         gstOnDiscount: bill.gstOnDiscount || 0,
-        finalPayableToRestaurant: bill.finalPayableToRestaurant || 0,
-        computedVersion: "settlement-v1",
+        finalPayableToRestaurant: restaurantNet,
+        // Settlement v2 clarity fields
+        restaurantGross,
+        restaurantNet,
+        riderDeliveryEarning: riderEarningsData.deliveryCharge,
+        riderIncentive: riderIncentiveAmount,
+        riderPlatformFeeShare,
+        adminPlatformFeeShare: 0,
+        computedVersion: "settlement-v2",
         computedAt: new Date(),
       },
+      // Canonical settlement fields
+      restaurantEarning: restaurantNet,
+      adminCommissionAtOrder: adminCommission,
       adminCommission,
-      restaurantCommission,
-      riderCommission,
-      riderIncentive,
+      // Structured rider earnings (single source of truth for new code)
+      riderEarnings: riderEarningsData,
+      // Legacy backward-compat fields
+      restaurantCommission: restaurantNet,
+      riderEarning: riderEarningsData.totalRiderEarning,
+      riderIncentive: riderIncentiveAmount,
       riderIncentivePercent: incentivePercent,
-      riderEarning,
       deliveryAddress: {
         addressLine: deliveryAddress.addressLine,
         coordinates: deliveryAddress.location.coordinates,
