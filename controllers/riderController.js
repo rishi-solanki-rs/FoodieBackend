@@ -1685,7 +1685,7 @@ exports.verifyRiderVehicle = async (req, res) => {
       rider.verificationStatus = 'pending';
     }
     await rider.save();
-    try { await sendNotification(rider.user, 'Vehicle Verification Update', `Your vehicle verification status: ${status}`); } catch (e) { }
+    try { await sendNotification(rider.user._id || rider.user, 'Vehicle Verification Update', `Your vehicle verification status: ${status}`); } catch (e) { }
     res.status(200).json({
       message: status === 'approved'
         ? (rider.verificationStatus === 'approved'
@@ -1759,7 +1759,7 @@ exports.adminClearSOS = async (req, res) => {
     rider.sosLastAt = new Date();
     await rider.save();
     await SupportTicket.updateMany({ user: rider.user, subject: 'SOS Alert', status: 'open' }, { status: 'resolved', $push: { reply: { by: 'admin', message: 'Resolved by admin', createdAt: new Date() } } });
-    try { await sendNotification(rider.user, 'SOS Cleared by Admin', 'Your SOS has been cleared by support'); } catch (e) { }
+    try { await sendNotification(rider.user._id || rider.user, 'SOS Cleared by Admin', 'Your SOS has been cleared by support'); } catch (e) { }
     res.status(200).json({ message: 'SOS cleared for rider', rider });
   } catch (error) {
     res.status(500).json({ message: error.message });
