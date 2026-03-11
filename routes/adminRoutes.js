@@ -327,6 +327,10 @@ router.post(
   "/restaurants/:restaurantId/menu",
   protect,
   admin,
+  upload.fields([
+    { name: "image", maxCount: 1 },
+    { name: "addOnImages", maxCount: 20 },
+  ]),
   adminController.createMenuItemForRestaurant
 );
 
