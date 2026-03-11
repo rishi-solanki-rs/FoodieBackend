@@ -12,6 +12,7 @@ const Restaurant = require('../models/Restaurant');
 const { getPaginationParams } = require('../utils/pagination');
 const { getFileUrl } = require('../utils/upload');
 const { calculateDistance } = require('../utils/locationUtils');
+const { updateRiderDocumentStatus } = require('../utils/documentExpiryChecker');
 const { initiateProfileUpdate, verifyOTPAndApplyUpdate, checkDuplicate } = require('../utils/profileUpdateHelpers');
 const { sendOTP } = require('../services/smsService');
 const logger = console;
@@ -85,6 +86,160 @@ const extractBracketObject = (body = {}, rootKey) => {
   return result;
 };
 
+const CRITICAL_DOCUMENT_KEYS = [
+  'license',
+  'rc',
+  'insurance',
+  'panCard',
+  'aadharCard',
+  'medicalCertificate',
+  'policyVerification',
+];
+
+const EXPIRY_DOCUMENT_KEYS = [
+  'license',
+  'rc',
+  'insurance',
+  'medicalCertificate',
+  'policyVerification',
+];
+
+const hasAnyValue = (value) => {
+  if (value === null || value === undefined) return false;
+  if (typeof value === 'string') return value.trim().length > 0;
+  if (Array.isArray(value)) return value.length > 0;
+  if (isPlainObject(value)) return Object.keys(value).length > 0;
+  return true;
+};
+
+const normalizeString = (value) => (typeof value === 'string' ? value.trim() : value);
+
+const isEqualDeep = (a, b) => {
+  if (a === b) return true;
+  if (a instanceof Date || b instanceof Date) {
+    const aTime = a instanceof Date ? a.getTime() : new Date(a).getTime();
+    const bTime = b instanceof Date ? b.getTime() : new Date(b).getTime();
+    return Number.isFinite(aTime) && Number.isFinite(bTime) && aTime === bTime;
+  }
+  if (typeof a !== typeof b) return false;
+  if (Array.isArray(a) && Array.isArray(b)) {
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i += 1) {
+      if (!isEqualDeep(a[i], b[i])) return false;
+    }
+    return true;
+  }
+  if (isPlainObject(a) && isPlainObject(b)) {
+    const aKeys = Object.keys(a);
+    const bKeys = Object.keys(b);
+    if (aKeys.length !== bKeys.length) return false;
+    for (const key of aKeys) {
+      if (!Object.prototype.hasOwnProperty.call(b, key)) return false;
+      if (!isEqualDeep(a[key], b[key])) return false;
+    }
+    return true;
+  }
+  return false;
+};
+
+const stripDocumentAdminFields = (doc = {}) => {
+  if (!isPlainObject(doc)) return {};
+  const clean = { ...doc };
+  delete clean.verifiedAt;
+  delete clean.verifiedBy;
+  return clean;
+};
+
+const getChangedDocumentKeys = (existingDocuments = {}, updatedDocuments = {}) => {
+  const changed = [];
+  for (const key of CRITICAL_DOCUMENT_KEYS) {
+    const before = stripDocumentAdminFields(existingDocuments[key] || {});
+    const after = stripDocumentAdminFields(updatedDocuments[key] || {});
+    if (!isEqualDeep(before, after)) changed.push(key);
+  }
+  return changed;
+};
+
+const resetVerificationForChangedDocuments = (documents = {}, changedKeys = []) => {
+  const next = deepMergeObjects({}, documents);
+  for (const key of changedKeys) {
+    if (!isPlainObject(next[key])) next[key] = {};
+    next[key].verifiedAt = undefined;
+    next[key].verifiedBy = undefined;
+  }
+  return next;
+};
+
+const validateFutureDate = (value, label) => {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) {
+    return `${label} must be a valid date`;
+  }
+  const now = new Date();
+  if (date <= now) {
+    return `${label} must be a future date`;
+  }
+  return null;
+};
+
+const validateDocumentExpiryDates = (documents = {}) => {
+  if (!isPlainObject(documents)) return null;
+  for (const key of EXPIRY_DOCUMENT_KEYS) {
+    const candidate = documents[key];
+    if (!isPlainObject(candidate) || candidate.expiryDate === undefined) continue;
+    const error = validateFutureDate(candidate.expiryDate, `${key}.expiryDate`);
+    if (error) return error;
+  }
+  return null;
+};
+
+const findForbiddenVerificationFields = (payload = {}, path = '') => {
+  if (!isPlainObject(payload)) return [];
+  const blocked = [];
+  const forbiddenKeys = new Set([
+    'verifiedAt',
+    'verifiedBy',
+    'vehicleVerified',
+    'vehicleApproval',
+    'verificationStatus',
+    'approvedAt',
+    'approvedBy',
+    'rejectionReason',
+    'riderVerified',
+  ]);
+
+  for (const [key, value] of Object.entries(payload)) {
+    const nextPath = path ? `${path}.${key}` : key;
+    const topLevelBlocked = [
+      'verificationStatus',
+      'riderVerified',
+      'rejectionReason',
+      'rejectedBy',
+      'rejectionDate',
+    ];
+
+    if (topLevelBlocked.includes(nextPath)) {
+      blocked.push(nextPath);
+      continue;
+    }
+
+    const isBankProtected = nextPath.startsWith('bankDetails.') && forbiddenKeys.has(key);
+    const isDocumentProtected = nextPath.startsWith('documents.') && forbiddenKeys.has(key);
+    const isVehicleProtected = nextPath.startsWith('vehicle.') && forbiddenKeys.has(key);
+
+    if (isBankProtected || isDocumentProtected || isVehicleProtected) {
+      blocked.push(nextPath);
+      continue;
+    }
+
+    if (isPlainObject(value)) {
+      blocked.push(...findForbiddenVerificationFields(value, nextPath));
+    }
+  }
+
+  return blocked;
+};
+
 const getAverageRating = (rating) => {
   if (typeof rating === "number") return rating;
   if (rating && typeof rating === "object" && typeof rating.average === "number") {
@@ -113,7 +268,47 @@ const generateRiderToken = (res, user) => {
 };
 exports.updateRiderProfile = async (req, res) => {
   try {
-    let { name, email, mobile, address, workCity, workZone, language, fcmToken } = req.body;
+    let {
+      name,
+      email,
+      mobile,
+      address,
+      workCity,
+      workZone,
+      language,
+      fcmToken,
+      permanentAddress,
+      localAddress,
+      emergencyContactNumber,
+      vehicle,
+      documents,
+      bankDetails,
+    } = req.body;
+
+    address = parseIfString(address);
+    permanentAddress = parseIfString(permanentAddress);
+    localAddress = parseIfString(localAddress);
+    vehicle = parseIfString(vehicle);
+    documents = parseIfString(documents);
+    bankDetails = parseIfString(bankDetails);
+
+    const bracketVehicle = extractBracketObject(req.body, 'vehicle');
+    const bracketDocuments = extractBracketObject(req.body, 'documents');
+    const bracketBankDetails = extractBracketObject(req.body, 'bankDetails');
+
+    vehicle = deepMergeObjects(vehicle || {}, bracketVehicle);
+    documents = deepMergeObjects(documents || {}, bracketDocuments);
+    bankDetails = deepMergeObjects(bankDetails || {}, bracketBankDetails);
+
+    const forbiddenPaths = findForbiddenVerificationFields({
+      ...req.body,
+      ...(isPlainObject(vehicle) ? { vehicle } : {}),
+      ...(isPlainObject(documents) ? { documents } : {}),
+      ...(isPlainObject(bankDetails) ? { bankDetails } : {}),
+    });
+    if (forbiddenPaths.length) {
+      return sendError(res, 400, 'Verification fields are admin controlled', forbiddenPaths);
+    }
 
     if (!req.user || !isValidObjectId(req.user._id)) {
       return sendError(res, 401, "Unauthorized rider");
@@ -143,32 +338,131 @@ exports.updateRiderProfile = async (req, res) => {
       user.profilePic = getFileUrl(req.file);
     }
 
-    if (language !== undefined) {
-      user.language = language;
+    if (language !== undefined) user.language = normalizeString(language);
+    if (fcmToken !== undefined) user.fcmToken = normalizeString(fcmToken);
+
+    if (address !== undefined && !isPlainObject(address)) {
+      return sendError(res, 400, 'Invalid address format');
     }
-    if (fcmToken !== undefined) {
-      user.fcmToken = fcmToken;
+    if (permanentAddress !== undefined && !isPlainObject(permanentAddress)) {
+      return sendError(res, 400, 'Invalid permanentAddress format');
+    }
+    if (localAddress !== undefined && !isPlainObject(localAddress)) {
+      return sendError(res, 400, 'Invalid localAddress format');
+    }
+    if (vehicle !== undefined && !isPlainObject(vehicle)) {
+      return sendError(res, 400, 'Invalid vehicle format');
+    }
+    if (documents !== undefined && !isPlainObject(documents)) {
+      return sendError(res, 400, 'Invalid documents format');
+    }
+    if (bankDetails !== undefined && !isPlainObject(bankDetails)) {
+      return sendError(res, 400, 'Invalid bankDetails format');
     }
 
+    const expiryError = validateDocumentExpiryDates(documents || {});
+    if (expiryError) return sendError(res, 400, expiryError);
+
     if (address !== undefined) {
-      if (typeof address === 'string') {
-        try {
-          address = JSON.parse(address);
-        } catch (e) {
-          return sendError(res, 400, "Invalid address format");
-        }
-      }
-      rider.address = { ...(rider.address || {}), ...address };
+      rider.address = deepMergeObjects(rider.address || {}, address);
     }
-    if (workCity !== undefined) rider.workCity = workCity;
-    if (workZone !== undefined) rider.workZone = workZone;
+    if (permanentAddress !== undefined) {
+      rider.permanentAddress = deepMergeObjects(rider.permanentAddress || {}, permanentAddress);
+    }
+    if (localAddress !== undefined) {
+      rider.localAddress = deepMergeObjects(rider.localAddress || {}, localAddress);
+    }
+    if (workCity !== undefined) rider.workCity = normalizeString(workCity);
+    if (workZone !== undefined) rider.workZone = normalizeString(workZone);
+    if (emergencyContactNumber !== undefined) {
+      rider.emergencyContactNumber = normalizeString(emergencyContactNumber);
+    }
+
+    const criticalChanges = {
+      vehicle: false,
+      documents: false,
+      bankDetails: false,
+    };
+
+    if (isPlainObject(vehicle) && hasAnyValue(vehicle)) {
+      const nextVehicle = deepMergeObjects(rider.vehicle || {}, vehicle);
+      const vehicleIdentityChanged =
+        !isEqualDeep(normalizeString(rider.vehicle?.type), normalizeString(nextVehicle?.type)) ||
+        !isEqualDeep(normalizeString(rider.vehicle?.model), normalizeString(nextVehicle?.model)) ||
+        !isEqualDeep(normalizeString(rider.vehicle?.number), normalizeString(nextVehicle?.number));
+
+      rider.vehicle = nextVehicle;
+
+      if (vehicleIdentityChanged) {
+        criticalChanges.vehicle = true;
+        rider.vehicle.vehicleApproval = rider.vehicle.vehicleApproval || {};
+        rider.vehicle.vehicleApproval.status = 'pending';
+        rider.vehicle.vehicleApproval.reason = undefined;
+        rider.vehicle.vehicleApproval.approvedAt = undefined;
+        rider.vehicle.vehicleApproval.approvedBy = undefined;
+        rider.vehicle.vehicleVerified = false;
+        rider.verificationStatus = 'pending';
+      }
+    }
+
+    if (isPlainObject(documents) && hasAnyValue(documents)) {
+      const existingDocs = rider.toObject().documents || {};
+      const mergedDocs = deepMergeObjects(existingDocs, documents);
+      const changedDocumentKeys = getChangedDocumentKeys(existingDocs, mergedDocs);
+
+      if (changedDocumentKeys.length) {
+        criticalChanges.documents = true;
+        rider.documents = resetVerificationForChangedDocuments(mergedDocs, changedDocumentKeys);
+        rider.riderVerified = false;
+        rider.verificationStatus = 'pending';
+      }
+    }
+
+    if (isPlainObject(bankDetails) && hasAnyValue(bankDetails)) {
+      const nextBankDetails = deepMergeObjects(rider.bankDetails || {}, bankDetails);
+      const comparisonCurrent = { ...(rider.bankDetails || {}) };
+      const comparisonNext = { ...nextBankDetails };
+      delete comparisonCurrent.verified;
+      delete comparisonCurrent.verificationStatus;
+      delete comparisonCurrent.rejectionReason;
+      delete comparisonCurrent.approvedAt;
+      delete comparisonCurrent.approvedBy;
+      delete comparisonNext.verified;
+      delete comparisonNext.verificationStatus;
+      delete comparisonNext.rejectionReason;
+      delete comparisonNext.approvedAt;
+      delete comparisonNext.approvedBy;
+
+      if (!isEqualDeep(comparisonCurrent, comparisonNext)) {
+        criticalChanges.bankDetails = true;
+        rider.bankDetails = {
+          ...nextBankDetails,
+          verified: false,
+          verificationStatus: 'pending',
+          rejectionReason: undefined,
+          approvedAt: undefined,
+          approvedBy: undefined,
+        };
+      }
+    }
 
     await user.save();
     await rider.save();
 
+    if (criticalChanges.documents) {
+      await updateRiderDocumentStatus(rider._id);
+    }
+
     res.status(200).json({
       success: true,
-      message: "Profile updated successfully",
+      message: (criticalChanges.vehicle || criticalChanges.documents || criticalChanges.bankDetails)
+        ? 'Profile updated. Critical changes are pending admin approval'
+        : 'Profile updated successfully',
+      approval: {
+        vehicle: criticalChanges.vehicle ? 'pending' : rider.vehicle?.vehicleApproval?.status,
+        documents: criticalChanges.documents ? 'pending' : (rider.riderVerified ? 'approved' : 'pending'),
+        bankDetails: criticalChanges.bankDetails ? 'pending' : rider.bankDetails?.verificationStatus,
+      },
       user: {
         _id: user._id,
         name: user.name,
@@ -180,6 +474,9 @@ exports.updateRiderProfile = async (req, res) => {
       rider: {
         _id: rider._id,
         address: rider.address,
+        permanentAddress: rider.permanentAddress,
+        localAddress: rider.localAddress,
+        emergencyContactNumber: rider.emergencyContactNumber,
         workCity: rider.workCity,
         workZone: rider.workZone,
         verificationStatus: rider.verificationStatus
@@ -1119,8 +1416,22 @@ exports.updateDocuments = async (req, res) => {
     const bracketDocuments = extractBracketObject(req.body, 'documents');
     documents = deepMergeObjects(documents || {}, bracketDocuments);
 
+    const forbiddenPaths = findForbiddenVerificationFields({ documents, ...req.body });
+    if (forbiddenPaths.length) {
+      return res.status(400).json({
+        success: false,
+        message: 'Verification fields are admin controlled',
+        details: forbiddenPaths,
+      });
+    }
+
     if (documents !== undefined && !isPlainObject(documents)) {
       return res.status(400).json({ message: 'Invalid documents format' });
+    }
+
+    const expiryError = validateDocumentExpiryDates(documents || {});
+    if (expiryError) {
+      return res.status(400).json({ message: expiryError });
     }
 
     permanentAddress = parseIfString(permanentAddress);
@@ -1176,21 +1487,40 @@ exports.updateDocuments = async (req, res) => {
       }
     }
 
-    rider.documents = updatedDocuments;
+    const changedDocumentKeys = getChangedDocumentKeys(existingDocs, updatedDocuments);
+
+    if (changedDocumentKeys.length) {
+      rider.documents = resetVerificationForChangedDocuments(updatedDocuments, changedDocumentKeys);
+      rider.riderVerified = false;
+      rider.verificationStatus = 'pending';
+    }
+
     if (permanentAddress !== undefined) rider.permanentAddress = deepMergeObjects(rider.permanentAddress || {}, permanentAddress);
     if (localAddress !== undefined) rider.localAddress = deepMergeObjects(rider.localAddress || {}, localAddress);
-    if (emergencyContactNumber !== undefined) rider.emergencyContactNumber = emergencyContactNumber;
-
-    rider.verificationStatus = 'pending';
-    rider.riderVerified = false;
+    if (emergencyContactNumber !== undefined) rider.emergencyContactNumber = normalizeString(emergencyContactNumber);
 
     await rider.save();
+    if (changedDocumentKeys.length) {
+      await updateRiderDocumentStatus(rider._id);
+    }
     const admins = await User.find({ role: 'admin' });
     const user = await User.findById(req.user._id).select('name');
-    for (const a of admins) {
-      try { await sendNotification(a._id, 'Rider Documents Updated', `${user ? user.name : 'A rider'} updated their documents`); } catch (e) { }
+    if (changedDocumentKeys.length) {
+      for (const a of admins) {
+        try { await sendNotification(a._id, 'Rider Documents Updated', `${user ? user.name : 'A rider'} updated their documents`); } catch (e) { }
+      }
     }
-    res.status(200).json({ message: 'Documents uploaded, verification pending', rider });
+    res.status(200).json({
+      success: true,
+      message: changedDocumentKeys.length
+        ? 'Documents updated and submitted for admin approval'
+        : 'Documents endpoint updated non-critical fields only',
+      approval: {
+        documents: changedDocumentKeys.length ? 'pending' : (rider.riderVerified ? 'approved' : 'pending'),
+      },
+      changedDocuments: changedDocumentKeys,
+      rider,
+    });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -1199,6 +1529,18 @@ exports.updateVehicle = async (req, res) => {
   try {
     let { vehicle } = req.body; // Expect { type, model, number }
     vehicle = parseIfString(vehicle);
+
+    const bracketVehicle = extractBracketObject(req.body, 'vehicle');
+    vehicle = deepMergeObjects(vehicle || {}, bracketVehicle);
+
+    const forbiddenPaths = findForbiddenVerificationFields({ vehicle, ...req.body });
+    if (forbiddenPaths.length) {
+      return res.status(400).json({
+        success: false,
+        message: 'Verification fields are admin controlled',
+        details: forbiddenPaths,
+      });
+    }
 
     if (!vehicle || typeof vehicle !== 'object') {
       return res.status(400).json({ message: 'Vehicle details are required' });
@@ -1211,19 +1553,40 @@ exports.updateVehicle = async (req, res) => {
       const foundVehicle = await VehicleModel.findOne({ $or: [{ name: vehicle.type }, { type: vehicle.type }] });
       if (foundVehicle) vehicle.type = foundVehicle.type || foundVehicle.name || vehicle.type;
     }
-    rider.vehicle = { ...(rider.vehicle || {}), ...(vehicle || {}) };
-    rider.vehicle.vehicleApproval = rider.vehicle.vehicleApproval || {};
-    rider.vehicle.vehicleApproval.status = 'pending';
-    rider.vehicle.vehicleVerified = false;
-    rider.verificationStatus = 'pending';
-    rider.riderVerified = false;
-    await rider.save();
-    const admins = await User.find({ role: 'admin' });
-    const user = await User.findById(req.user._id).select('name');
-    for (const a of admins) {
-      try { await sendNotification(a._id, 'Rider Vehicle Updated', `${user ? user.name : 'A rider'} updated vehicle info`); } catch (e) { }
+    const nextVehicle = deepMergeObjects(rider.vehicle || {}, vehicle || {});
+    const vehicleIdentityChanged =
+      !isEqualDeep(normalizeString(rider.vehicle?.type), normalizeString(nextVehicle?.type)) ||
+      !isEqualDeep(normalizeString(rider.vehicle?.model), normalizeString(nextVehicle?.model)) ||
+      !isEqualDeep(normalizeString(rider.vehicle?.number), normalizeString(nextVehicle?.number));
+
+    rider.vehicle = nextVehicle;
+
+    if (vehicleIdentityChanged) {
+      rider.vehicle.vehicleApproval = rider.vehicle.vehicleApproval || {};
+      rider.vehicle.vehicleApproval.status = 'pending';
+      rider.vehicle.vehicleApproval.reason = undefined;
+      rider.vehicle.vehicleApproval.approvedAt = undefined;
+      rider.vehicle.vehicleApproval.approvedBy = undefined;
+      rider.vehicle.vehicleVerified = false;
+      rider.verificationStatus = 'pending';
     }
-    res.status(200).json({ message: 'Vehicle updated, approval pending', rider });
+
+    await rider.save();
+    if (vehicleIdentityChanged) {
+      const admins = await User.find({ role: 'admin' });
+      const user = await User.findById(req.user._id).select('name');
+      for (const a of admins) {
+        try { await sendNotification(a._id, 'Rider Vehicle Updated', `${user ? user.name : 'A rider'} updated vehicle info`); } catch (e) { }
+      }
+    }
+    res.status(200).json({
+      success: true,
+      message: vehicleIdentityChanged ? 'Vehicle updated, approval pending' : 'Vehicle details unchanged',
+      approval: {
+        vehicle: vehicleIdentityChanged ? 'pending' : rider.vehicle?.vehicleApproval?.status,
+      },
+      rider,
+    });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -1232,37 +1595,70 @@ exports.updateRiderBankDetails = async (req, res) => {
   try {
     let { bankDetails } = req.body;
     bankDetails = parseIfString(bankDetails);
+    const bracketBankDetails = extractBracketObject(req.body, 'bankDetails');
+    bankDetails = deepMergeObjects(bankDetails || {}, bracketBankDetails);
+
+    const forbiddenPaths = findForbiddenVerificationFields({ bankDetails, ...req.body });
+    if (forbiddenPaths.length) {
+      return res.status(400).json({
+        success: false,
+        message: 'Verification fields are admin controlled',
+        details: forbiddenPaths,
+      });
+    }
+
     if (!bankDetails || !isPlainObject(bankDetails)) {
       return res.status(400).json({ message: 'Bank details are required' });
     }
     const rider = await Rider.findOne({ user: req.user._id });
     if (!rider) return res.status(404).json({ message: 'Rider profile not found' });
-    rider.bankDetails = {
-      ...(rider.bankDetails || {}),
-      ...bankDetails,
-      verified: false,
-      verificationStatus: 'pending',
-      rejectionReason: undefined,
-      approvedAt: undefined,
-      approvedBy: undefined
-    };
-    rider.verificationStatus = 'pending';
-    rider.riderVerified = false;
+
+    const nextBankDetails = deepMergeObjects(rider.bankDetails || {}, bankDetails);
+    const comparisonCurrent = { ...(rider.bankDetails || {}) };
+    const comparisonNext = { ...nextBankDetails };
+    delete comparisonCurrent.verified;
+    delete comparisonCurrent.verificationStatus;
+    delete comparisonCurrent.rejectionReason;
+    delete comparisonCurrent.approvedAt;
+    delete comparisonCurrent.approvedBy;
+    delete comparisonNext.verified;
+    delete comparisonNext.verificationStatus;
+    delete comparisonNext.rejectionReason;
+    delete comparisonNext.approvedAt;
+    delete comparisonNext.approvedBy;
+
+    const bankDetailsChanged = !isEqualDeep(comparisonCurrent, comparisonNext);
+    if (bankDetailsChanged) {
+      rider.bankDetails = {
+        ...nextBankDetails,
+        verified: false,
+        verificationStatus: 'pending',
+        rejectionReason: undefined,
+        approvedAt: undefined,
+        approvedBy: undefined,
+      };
+    }
+
     await rider.save();
-    const admins = await User.find({ role: 'admin' });
-    const user = await User.findById(req.user._id).select('name');
-    for (const a of admins) {
-      try {
-        await sendNotification(
-          a._id,
-          'Rider Bank Details Updated',
-          `${user ? user.name : 'A rider'} updated their bank details and requires approval`
-        );
-      } catch (e) { }
+    if (bankDetailsChanged) {
+      const admins = await User.find({ role: 'admin' });
+      const user = await User.findById(req.user._id).select('name');
+      for (const a of admins) {
+        try {
+          await sendNotification(
+            a._id,
+            'Rider Bank Details Updated',
+            `${user ? user.name : 'A rider'} updated their bank details and requires approval`
+          );
+        } catch (e) { }
+      }
     }
     res.status(200).json({
       success: true,
-      message: 'Bank details submitted for admin approval',
+      message: bankDetailsChanged ? 'Bank details submitted for admin approval' : 'Bank details unchanged',
+      approval: {
+        bankDetails: bankDetailsChanged ? 'pending' : rider.bankDetails?.verificationStatus,
+      },
       rider
     });
   } catch (error) {
@@ -1273,19 +1669,26 @@ exports.verifyRiderVehicle = async (req, res) => {
   try {
     const { status, reason } = req.body; // status = 'approved'|'rejected'|'pending'
     if (!['pending', 'approved', 'rejected'].includes(status)) return res.status(400).json({ message: 'Invalid status' });
+    if (status === 'rejected' && !normalizeString(reason)) {
+      return res.status(400).json({ message: 'Rejection reason is required for vehicle rejection' });
+    }
     const rider = await Rider.findById(req.params.id).populate('user', 'name');
     if (!rider) return res.status(404).json({ message: 'Rider not found' });
     rider.vehicle.vehicleApproval = rider.vehicle.vehicleApproval || {};
     rider.vehicle.vehicleApproval.status = status;
-    rider.vehicle.vehicleApproval.reason = reason || '';
+    rider.vehicle.vehicleApproval.reason = normalizeString(reason) || undefined;
     if (status === 'approved') {
       rider.vehicle.vehicleApproval.approvedAt = new Date();
       rider.vehicle.vehicleApproval.approvedBy = req.user._id;
       rider.vehicle.vehicleVerified = true;
     } else if (status === 'rejected') {
+      rider.vehicle.vehicleApproval.approvedAt = undefined;
+      rider.vehicle.vehicleApproval.approvedBy = undefined;
       rider.vehicle.vehicleVerified = false;
       rider.verificationStatus = 'rejected';
     } else {
+      rider.vehicle.vehicleApproval.approvedAt = undefined;
+      rider.vehicle.vehicleApproval.approvedBy = undefined;
       rider.vehicle.vehicleVerified = false;
     }
     if (rider.riderVerified && rider.vehicle.vehicleVerified) {
@@ -1313,6 +1716,9 @@ exports.verifyRiderBankDetails = async (req, res) => {
     if (!['approved', 'rejected'].includes(status)) {
       return res.status(400).json({ message: 'Invalid status. Use approved or rejected' });
     }
+    if (status === 'rejected' && !normalizeString(reason)) {
+      return res.status(400).json({ message: 'Rejection reason is required for bank details rejection' });
+    }
     const rider = await Rider.findById(req.params.id).populate('user', 'name');
     if (!rider) return res.status(404).json({ message: 'Rider not found' });
     if (!rider.bankDetails) {
@@ -1326,8 +1732,9 @@ exports.verifyRiderBankDetails = async (req, res) => {
       rider.bankDetails.rejectionReason = undefined;
     } else if (status === 'rejected') {
       rider.bankDetails.verified = false;
-      rider.bankDetails.rejectionReason = reason || 'Bank details rejected';
-      rider.verificationStatus = 'rejected';
+      rider.bankDetails.approvedAt = undefined;
+      rider.bankDetails.approvedBy = undefined;
+      rider.bankDetails.rejectionReason = normalizeString(reason) || 'Bank details rejected';
     }
     await rider.save();
     try {
@@ -1602,14 +2009,35 @@ exports.verifyRider = async (req, res) => {
     if (!['pending', 'approved', 'rejected', 'suspended'].includes(newStatus)) {
       return res.status(400).json({ message: "Invalid status" });
     }
+    if (newStatus === 'rejected' && !normalizeString(reason)) {
+      return res.status(400).json({ message: 'Rejection reason is required' });
+    }
+
+    const now = new Date();
     if (newStatus === 'approved') {
       rider.riderVerified = true;
+      rider.rejectionReason = undefined;
+      rider.rejectionDate = undefined;
+      rider.rejectedBy = undefined;
+
+      for (const key of CRITICAL_DOCUMENT_KEYS) {
+        const doc = rider.documents?.[key];
+        if (!isPlainObject(doc)) continue;
+        const hasContent = Object.entries(doc).some(([docKey, docValue]) => {
+          if (docKey === 'verifiedAt' || docKey === 'verifiedBy') return false;
+          return hasAnyValue(docValue);
+        });
+        if (!hasContent) continue;
+
+        rider.documents[key].verifiedAt = now;
+        rider.documents[key].verifiedBy = req.user._id;
+      }
     } else if (newStatus === 'rejected') {
       rider.riderVerified = false;
       rider.verificationStatus = 'rejected';
-      if (reason) {
-        rider.rejectionReason = reason;
-      }
+      rider.rejectionReason = normalizeString(reason);
+      rider.rejectionDate = now;
+      rider.rejectedBy = req.user._id;
     } else {
       rider.riderVerified = false;
     }

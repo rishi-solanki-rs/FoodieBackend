@@ -107,8 +107,22 @@ router.put('/documents', protect, rider, upload.fields([
   { name: 'medicalCertificate', maxCount: 1 },
   { name: 'policyVerification', maxCount: 1 }
 ]), updateDocuments);
+router.patch('/documents', protect, rider, upload.fields([
+  { name: 'licenseFrontImage', maxCount: 1 },
+  { name: 'licenseBackImage', maxCount: 1 },
+  { name: 'rcImage', maxCount: 1 },
+  { name: 'insuranceImage', maxCount: 1 },
+  { name: 'panCardImage', maxCount: 1 },
+  { name: 'aadharCardImage', maxCount: 1 },
+  { name: 'medicalCertificate', maxCount: 1 },
+  { name: 'policyVerification', maxCount: 1 }
+]), updateDocuments);
 router.put('/vehicle', protect, rider, updateVehicle);
+router.patch('/vehicle', protect, rider, updateVehicle);
 router.put('/bank', protect, rider, updateRiderBankDetails);
+router.patch('/bank', protect, rider, updateRiderBankDetails);
+router.put('/bank-details', protect, rider, updateRiderBankDetails);
+router.patch('/bank-details', protect, rider, updateRiderBankDetails);
 router.post("/admin/create", protect, admin, upload.fields([
   { name: 'profilePic', maxCount: 1 },
   { name: 'licenseFrontImage', maxCount: 1 },
