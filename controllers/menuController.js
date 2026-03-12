@@ -46,6 +46,63 @@ const getOwnerRestaurant = async (userId) => {
   }
   return restaurant;
 };
+
+/**
+ * Compute discount display fields for a product.
+ * Rules:
+ *  - If both adminDiscount and restaurantDiscount are active, show the higher one.
+ *  - If only one is active, show that one.
+ *  - finalDiscount is the effective percent (or flat ₹ value) to display.
+ *  - discountTag is the human-readable label e.g. "10% OFF".
+ */
+function computeDiscountFields(product) {
+  const ad = product.adminDiscount;
+  const rd = product.restaurantDiscount;
+  const adActive = ad && ad.active && ad.value > 0;
+  const rdActive = rd && rd.active && rd.value > 0;
+
+  // Normalise to a comparable numeric value (for flat, use raw; for percent, use raw)
+  const adVal = adActive ? ad.value : 0;
+  const rdVal = rdActive ? rd.value : 0;
+
+  let finalDiscount = 0;
+  let finalDiscountType = 'percent';
+  let discountSource = null; // 'admin' | 'restaurant' | null
+
+  if (adActive && rdActive) {
+    // Both active: pick the higher value (same type preferred; if mixed, both are shown raw)
+    if (adVal >= rdVal) {
+      finalDiscount = adVal;
+      finalDiscountType = ad.type || 'percent';
+      discountSource = 'admin';
+    } else {
+      finalDiscount = rdVal;
+      finalDiscountType = rd.type || 'percent';
+      discountSource = 'restaurant';
+    }
+  } else if (adActive) {
+    finalDiscount = adVal;
+    finalDiscountType = ad.type || 'percent';
+    discountSource = 'admin';
+  } else if (rdActive) {
+    finalDiscount = rdVal;
+    finalDiscountType = rd.type || 'percent';
+    discountSource = 'restaurant';
+  }
+
+  const discountTag = finalDiscount > 0
+    ? (finalDiscountType === 'percent' ? `${finalDiscount}% OFF` : `₹${finalDiscount} OFF`)
+    : null;
+
+  return {
+    restaurantDiscount: rdActive ? { type: rd.type, value: rdVal } : null,
+    adminDiscount: adActive ? { type: ad.type, value: adVal, reason: ad.reason || '' } : null,
+    finalDiscount,
+    finalDiscountType,
+    discountSource,
+    discountTag,
+  };
+}
 /**
  * GET /api/menu/categories
  * Public/Restaurant: List all active admin-managed food categories.
@@ -76,7 +133,8 @@ exports.addFoodItem = async (req, res) => {
       hsnCode,     // HSN code for GST compliance
       packagingCharge,  // Packaging charge per item
       packagingGstPercent, // GST on packaging
-      // NOTE: `discount`, `adminCommissionPercent`, `restaurantCommissionPercent` are admin-only fields
+      restaurantDiscount, // Restaurant-set discount — allowed here
+      // NOTE: `adminDiscount`, `adminCommissionPercent`, `restaurantCommissionPercent` are admin-only
       variations,
       addOns,
     } = req.body;
@@ -134,7 +192,6 @@ exports.addFoodItem = async (req, res) => {
     const parsedPackagingGst = packagingGstPercent !== undefined ? Number(packagingGstPercent) : 0;
     const finalPackagingGst = gstSlabs.includes(parsedPackagingGst) ? parsedPackagingGst : 0;
 
-    // Prepare product data
     const productData = {
       restaurant: restaurant._id,
       category: categoryId,
@@ -149,8 +206,30 @@ exports.addFoodItem = async (req, res) => {
       variations: normalizedVariations,
       addOns: normalizedAddOns,
       isApproved: false,
-      // discount is NOT set here — only admin can set it
+      // adminDiscount is NOT set here — only admin can set it
     };
+
+    // Validate and apply restaurantDiscount if provided
+    if (restaurantDiscount !== undefined && restaurantDiscount !== null) {
+      const rd = parseIfString(restaurantDiscount);
+      if (rd && typeof rd === 'object') {
+        const rdType = rd.type === 'flat' ? 'flat' : 'percent';
+        const rdValue = Number(rd.value ?? 0);
+        if (isNaN(rdValue) || rdValue < 0) {
+          return res.status(400).json({ message: 'restaurantDiscount.value must be a non-negative number' });
+        }
+        if (rdType === 'percent' && rdValue > 100) {
+          return res.status(400).json({ message: 'restaurantDiscount percent cannot exceed 100%' });
+        }
+        productData.restaurantDiscount = {
+          type: rdType,
+          value: rdValue,
+          active: rdValue > 0,
+          setAt: new Date(),
+          setBy: req.user._id,
+        };
+      }
+    }
 
     // Add packaging fields if provided
     if (packagingCharge !== undefined && packagingCharge !== null && packagingCharge !== '') {
@@ -192,7 +271,6 @@ exports.getMenu = async (req, res) => {
       restaurant: restaurantId,
       isApproved: true,
       available: true,
-      pendingUpdate: { $exists: false } // Exclude products with pending edits
     });
     if (products.length === 0) {
       return res.status(200).json({
@@ -247,6 +325,7 @@ exports.getMenu = async (req, res) => {
           addOns: p.addOns,
           available: p.available,
           isBestSeller: false,
+          ...computeDiscountFields(p),
         };
         menu[catName].push(item);
         const categoryKey = category._id.toString();
@@ -320,6 +399,7 @@ exports.bulkUpdateProducts = async (req, res) => {
         "unit",
         "category",
         "isVeg",
+        "restaurantDiscount",
       ];
       if (product.isApproved) {
         const pendingUpdate = { ...(product.pendingUpdate || {}) };
@@ -364,6 +444,15 @@ exports.bulkUpdateProducts = async (req, res) => {
                 });
               }
               pendingUpdate.addOns = normalizedAddOns;
+            } else if (field === "restaurantDiscount") {
+              const rd = parseIfString(u.restaurantDiscount);
+              if (rd && typeof rd === 'object') {
+                const rdType = rd.type === 'flat' ? 'flat' : 'percent';
+                const rdValue = Number(rd.value ?? 0);
+                if (!isNaN(rdValue) && rdValue >= 0 && (rdType !== 'percent' || rdValue <= 100)) {
+                  pendingUpdate.restaurantDiscount = { type: rdType, value: rdValue, active: rdValue > 0 };
+                }
+              }
             } else {
               pendingUpdate[field] = u[field];
             }
@@ -414,6 +503,21 @@ exports.bulkUpdateProducts = async (req, res) => {
               });
             }
             product.addOns = normalizedAddOns;
+          } else if (field === "restaurantDiscount") {
+            const rd = parseIfString(u.restaurantDiscount);
+            if (rd && typeof rd === 'object') {
+              const rdType = rd.type === 'flat' ? 'flat' : 'percent';
+              const rdValue = Number(rd.value ?? 0);
+              if (!isNaN(rdValue) && rdValue >= 0 && (rdType !== 'percent' || rdValue <= 100)) {
+                product.restaurantDiscount = {
+                  type: rdType,
+                  value: rdValue,
+                  active: rdValue > 0,
+                  setAt: new Date(),
+                  setBy: req.user._id,
+                };
+              }
+            }
           } else {
             product[field] = u[field];
           }
@@ -561,6 +665,7 @@ exports.editProduct = async (req, res) => {
       "seasonTag",
       "available",
       "category",
+      "restaurantDiscount",  // restaurant can update their own discount
     ];
     let hasPendingUpdate = false;
     if (product.isApproved) {
@@ -590,6 +695,15 @@ exports.editProduct = async (req, res) => {
             pendingUpdate.variations = normalizeNamedList(updates.variations);
           } else if (field === "addOns") {
             pendingUpdate.addOns = normalizeNamedList(updates.addOns);
+          } else if (field === "restaurantDiscount") {
+            const rd = parseIfString(updates.restaurantDiscount);
+            if (rd && typeof rd === 'object') {
+              const rdType = rd.type === 'flat' ? 'flat' : 'percent';
+              const rdValue = Number(rd.value ?? 0);
+              if (!isNaN(rdValue) && rdValue >= 0 && (rdType !== 'percent' || rdValue <= 100)) {
+                pendingUpdate.restaurantDiscount = { type: rdType, value: rdValue, active: rdValue > 0 };
+              }
+            }
           } else {
             pendingUpdate[field] = updates[field];
           }
@@ -613,6 +727,21 @@ exports.editProduct = async (req, res) => {
           product.variations = normalizeNamedList(updates.variations);
         } else if (field === "addOns") {
           product.addOns = normalizeNamedList(updates.addOns);
+        } else if (field === "restaurantDiscount") {
+          const rd = parseIfString(updates.restaurantDiscount);
+          if (rd && typeof rd === 'object') {
+            const rdType = rd.type === 'flat' ? 'flat' : 'percent';
+            const rdValue = Number(rd.value ?? 0);
+            if (!isNaN(rdValue) && rdValue >= 0 && (rdType !== 'percent' || rdValue <= 100)) {
+              product.restaurantDiscount = {
+                type: rdType,
+                value: rdValue,
+                active: rdValue > 0,
+                setAt: new Date(),
+                setBy: req.user._id,
+              };
+            }
+          }
         } else {
           product[field] = updates[field];
         }

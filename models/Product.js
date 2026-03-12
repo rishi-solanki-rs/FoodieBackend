@@ -82,8 +82,21 @@ const productSchema = new mongoose.Schema(
       default: 5,
     },
 
-    // ── Discount (admin-only, restaurants cannot set this) ─────────────────
-    discount: {
+    // ── Restaurant discount (set by restaurant owner during create / edit) ──────
+    restaurantDiscount: {
+      type: {
+        type: String,
+        enum: ['percent', 'flat'],
+        default: 'percent',
+      },
+      value: { type: Number, default: 0, min: 0 },
+      active: { type: Boolean, default: false },
+      setAt: { type: Date },
+      setBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, // restaurant owner
+    },
+
+    // ── Admin discount (campaigns / platform promotions, admin-only) ─────────
+    adminDiscount: {
       type: {
         type: String,
         enum: ['percent', 'flat'],
@@ -91,9 +104,9 @@ const productSchema = new mongoose.Schema(
       },
       value: { type: Number, default: 0, min: 0 },   // e.g. 10 = 10% or ₹10 flat
       reason: { type: String, default: '' },          // e.g. "Festival offer"
-      active: { type: Boolean, default: true },
+      active: { type: Boolean, default: false },
       setAt: { type: Date },
-      setBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+      setBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, // admin
     },
 
     // ── Availability & approval ────────────────────────────────────────────
@@ -107,7 +120,8 @@ const productSchema = new mongoose.Schema(
     approvalNotes: { type: String },
 
     // ── Pending updates (restaurant-proposed, needs admin approval) ─────────
-    // NOTE: discount, hsnCode are NOT in pendingUpdate — admin controls those directly.
+    // NOTE: adminDiscount and hsnCode are NOT in pendingUpdate — admin controls those directly.
+    // restaurantDiscount IS included so discount changes also go through approval.
     pendingUpdate: {
       type: {
         name: { en: String, de: String, ar: String },
@@ -119,6 +133,14 @@ const productSchema = new mongoose.Schema(
         seasonal: { type: Boolean },
         seasonTag: { type: String },
         category: { type: mongoose.Schema.Types.ObjectId, ref: "FoodCategory" },
+        restaurantDiscount: {
+          type: {
+            type: String,
+            enum: ['percent', 'flat'],
+          },
+          value: { type: Number, min: 0 },
+          active: { type: Boolean },
+        },
         variations: [
           {
             name: {

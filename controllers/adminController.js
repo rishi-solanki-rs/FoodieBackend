@@ -347,6 +347,20 @@ exports.approveRestaurantMenu = async (req, res) => {
             }
             product.addOns = normalized;
           }
+          if (pending.restaurantDiscount !== undefined) {
+            const rd = pending.restaurantDiscount;
+            const rdValue = Number(rd.value ?? 0);
+            const rdType = rd.type === 'flat' ? 'flat' : 'percent';
+            if (!isNaN(rdValue) && rdValue >= 0 && (rdType !== 'percent' || rdValue <= 100)) {
+              product.restaurantDiscount = {
+                type: rdType,
+                value: rdValue,
+                active: rd.active !== undefined ? rd.active : rdValue > 0,
+                setAt: product.restaurantDiscount?.setAt || new Date(),
+                setBy: product.restaurantDiscount?.setBy,
+              };
+            }
+          }
           product.isApproved = true;
           product.approvedAt = new Date();
           product.adminCommissionPercent = resolveCommissionPercent(
@@ -438,6 +452,20 @@ exports.approveRestaurantMenu = async (req, res) => {
             }
             item.addOns = normalized;
           }
+          if (pending.restaurantDiscount !== undefined) {
+            const rd = pending.restaurantDiscount;
+            const rdValue = Number(rd.value ?? 0);
+            const rdType = rd.type === 'flat' ? 'flat' : 'percent';
+            if (!isNaN(rdValue) && rdValue >= 0 && (rdType !== 'percent' || rdValue <= 100)) {
+              item.restaurantDiscount = {
+                type: rdType,
+                value: rdValue,
+                active: rd.active !== undefined ? rd.active : rdValue > 0,
+                setAt: item.restaurantDiscount?.setAt || new Date(),
+                setBy: item.restaurantDiscount?.setBy,
+              };
+            }
+          }
           item.isApproved = true;
           item.approvedAt = new Date();
           item.adminCommissionPercent = resolveCommissionPercent(
@@ -525,6 +553,20 @@ exports.approveProduct = async (req, res) => {
         }
         if (pending.addOns !== undefined) {
           product.addOns = normalizeNamedList(pending.addOns);
+        }
+        if (pending.restaurantDiscount !== undefined) {
+          const rd = pending.restaurantDiscount;
+          const rdValue = Number(rd.value ?? 0);
+          const rdType = rd.type === 'flat' ? 'flat' : 'percent';
+          if (!isNaN(rdValue) && rdValue >= 0 && (rdType !== 'percent' || rdValue <= 100)) {
+            product.restaurantDiscount = {
+              type: rdType,
+              value: rdValue,
+              active: rd.active !== undefined ? rd.active : rdValue > 0,
+              setAt: product.restaurantDiscount?.setAt || new Date(),
+              setBy: product.restaurantDiscount?.setBy,
+            };
+          }
         }
         product.isApproved = true;
         product.approvedAt = new Date();
@@ -619,10 +661,10 @@ exports.setProductDiscount = async (req, res) => {
     // Setting value to 0 = effectively removing the discount
     const isActive = active !== undefined ? (active === true || active === 'true') : discountValue > 0;
 
-    product.discount = {
+    product.adminDiscount = {
       type: discountType,
       value: discountValue,
-      reason: reason ? String(reason).trim() : (product.discount?.reason || ''),
+      reason: reason ? String(reason).trim() : (product.adminDiscount?.reason || ''),
       active: isActive,
       setAt: new Date(),
       setBy: req.user._id,
@@ -631,10 +673,10 @@ exports.setProductDiscount = async (req, res) => {
     await product.save();
     return res.status(200).json({
       success: true,
-      message: discountValue > 0 && isActive ? `Discount of ${discountValue}${discountType === 'percent' ? '%' : '₹'} set on product` : 'Discount removed',
+      message: discountValue > 0 && isActive ? `Admin discount of ${discountValue}${discountType === 'percent' ? '%' : '₹'} set on product` : 'Admin discount removed',
       productId: product._id,
       productName: product.name?.en || product.name,
-      discount: product.discount,
+      adminDiscount: product.adminDiscount,
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });

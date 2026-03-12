@@ -99,6 +99,29 @@ exports.formatRestaurantForAdmin = (restaurant) => {
 };
 exports.formatProductForUser = (product) => {
   if (!product) return null;
+
+  const ad = product.adminDiscount;
+  const rd = product.restaurantDiscount;
+  const adActive = ad && ad.active && ad.value > 0;
+  const rdActive = rd && rd.active && rd.value > 0;
+  const adVal = adActive ? ad.value : 0;
+  const rdVal = rdActive ? rd.value : 0;
+
+  let finalDiscount = 0;
+  let finalDiscountType = 'percent';
+  if (adActive && rdActive) {
+    if (adVal >= rdVal) { finalDiscount = adVal; finalDiscountType = ad.type || 'percent'; }
+    else { finalDiscount = rdVal; finalDiscountType = rd.type || 'percent'; }
+  } else if (adActive) {
+    finalDiscount = adVal; finalDiscountType = ad.type || 'percent';
+  } else if (rdActive) {
+    finalDiscount = rdVal; finalDiscountType = rd.type || 'percent';
+  }
+
+  const discountTag = finalDiscount > 0
+    ? (finalDiscountType === 'percent' ? `${finalDiscount}% OFF` : `₹${finalDiscount} OFF`)
+    : null;
+
   return {
     _id: product._id,
     name: product.name,
@@ -112,6 +135,11 @@ exports.formatProductForUser = (product) => {
     addOns: product.addOns || [],
     seasonal: product.seasonal || false,
     seasonTag: product.seasonTag,
+    restaurantDiscount: rdActive ? { type: rd.type, value: rdVal } : null,
+    adminDiscount: adActive ? { type: ad.type, value: adVal, reason: ad.reason || '' } : null,
+    finalDiscount,
+    finalDiscountType,
+    discountTag,
   };
 };
 exports.formatOrderForCustomer = (order) => {
