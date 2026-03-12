@@ -396,9 +396,9 @@ exports.bulkUpdateProducts = async (req, res) => {
         "addOns",
         "variations",
         "image",
-        "unit",
+        "quantity",
+        "gstPercent",
         "category",
-        "isVeg",
         "restaurantDiscount",
       ];
       if (product.isApproved) {
@@ -658,7 +658,8 @@ exports.editProduct = async (req, res) => {
       "name",
       "description",
       "image",
-      "unit",
+      "quantity",
+      "gstPercent",
       "variations",
       "addOns",
       "seasonal",

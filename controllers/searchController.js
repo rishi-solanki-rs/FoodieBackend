@@ -146,7 +146,6 @@ exports.globalSearch = async (req, res) => {
         const { 
             q,
             cuisine,
-            isVeg, 
             minPrice, 
             maxPrice, 
             minRating, 
@@ -279,7 +278,7 @@ exports.globalSearch = async (req, res) => {
         } else if (hasCoords) {
             productQuery.restaurant = { $in: [] };
         }
-        if (isVeg === 'true') productQuery.isVeg = true;
+        // isVeg filter removed - field not in Product schema
         if (minPrice || maxPrice) {
             productQuery.basePrice = {};
             if (minPrice) productQuery.basePrice.$gte = Number(minPrice);
@@ -287,7 +286,7 @@ exports.globalSearch = async (req, res) => {
         }
         let products = await Product.find(productQuery)
             .populate('restaurant', '_id name rating deliveryTime isActive image bannerImage') 
-            .select('_id name image basePrice isVeg restaurant description');
+            .select('_id name image basePrice restaurant description quantity unit gstPercent variations addOns');
         if (minRating || maxDeliveryTime) {
             products = products.filter(p => {
                 if (!p.restaurant) return false;

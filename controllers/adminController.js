@@ -273,7 +273,7 @@ exports.getRestaurantMenuAdmin = async (req, res) => {
       filter.pendingUpdate = { $exists: false };
     }
     const products = await Product.find(filter)
-      .select("_id name description basePrice isApproved approvalNotes approvedAt pendingUpdate pendingUpdateAt restaurant category available isVeg image seasonal seasonTag variations addOns createdAt quantity unit hsnCode gstPercent adminCommissionPercent")
+      .select("_id name description basePrice isApproved approvalNotes approvedAt pendingUpdate pendingUpdateAt restaurant category available image seasonal seasonTag variations addOns createdAt quantity unit hsnCode gstPercent adminCommissionPercent restaurantCommissionPercent packagingCharge packagingGstPercent restaurantDiscount adminDiscount")
       .populate('category', 'name description image isActive')
       .sort({ createdAt: -1 })
       .lean();
@@ -312,10 +312,10 @@ exports.approveRestaurantMenu = async (req, res) => {
           }
           if (pending.image !== undefined) product.image = pending.image;
           if (pending.basePrice !== undefined) product.basePrice = pending.basePrice;
-          if (pending.isVeg !== undefined) product.isVeg = pending.isVeg;
+          if (pending.quantity !== undefined) product.quantity = pending.quantity;
+          if (pending.gstPercent !== undefined) product.gstPercent = pending.gstPercent;
           if (pending.seasonal !== undefined) product.seasonal = pending.seasonal;
           if (pending.seasonTag !== undefined) product.seasonTag = pending.seasonTag;
-          if (pending.unit !== undefined) product.unit = pending.unit;
           if (pending.category !== undefined) product.category = pending.category;
           if (pending.variations !== undefined) {
             let normalized = normalizeNamedList(pending.variations) || [];
@@ -420,7 +420,8 @@ exports.approveRestaurantMenu = async (req, res) => {
           }
           if (pending.image !== undefined) item.image = pending.image;
           if (pending.basePrice !== undefined) item.basePrice = pending.basePrice;
-          if (pending.isVeg !== undefined) item.isVeg = pending.isVeg;
+          if (pending.quantity !== undefined) item.quantity = pending.quantity;
+          if (pending.gstPercent !== undefined) item.gstPercent = pending.gstPercent;
           if (pending.seasonal !== undefined) item.seasonal = pending.seasonal;
           if (pending.seasonTag !== undefined) item.seasonTag = pending.seasonTag;
           if (pending.category !== undefined) item.category = pending.category;
@@ -544,7 +545,8 @@ exports.approveProduct = async (req, res) => {
         }
         if (pending.image !== undefined) product.image = pending.image;
         if (pending.basePrice !== undefined) product.basePrice = pending.basePrice;
-        if (pending.isVeg !== undefined) product.isVeg = pending.isVeg;
+        if (pending.quantity !== undefined) product.quantity = pending.quantity;
+        if (pending.gstPercent !== undefined) product.gstPercent = pending.gstPercent;
         if (pending.seasonal !== undefined) product.seasonal = pending.seasonal;
         if (pending.seasonTag !== undefined) product.seasonTag = pending.seasonTag;
         if (pending.category !== undefined) product.category = pending.category;
@@ -982,7 +984,7 @@ exports.getAllPendingMenuItems = async (req, res) => {
     const products = await Product.find(filter)
       .populate("restaurant", "name city owner")
       .populate("category", "name description image")
-      .select("_id name description basePrice isApproved approvalNotes pendingUpdate pendingUpdateAt restaurant category available isVeg image variations addOns createdAt quantity hsnCode gstPercent")
+      .select("_id name description basePrice isApproved approvalNotes pendingUpdate pendingUpdateAt restaurant category available image variations addOns createdAt quantity hsnCode gstPercent adminCommissionPercent restaurantCommissionPercent packagingCharge packagingGstPercent restaurantDiscount adminDiscount seasonal seasonTag")
       .sort({ [sortBy]: -1 })
       .skip(skip)
       .limit(parseInt(limit))
@@ -1007,7 +1009,6 @@ exports.getAllPendingMenuItems = async (req, res) => {
         name: p.category?.name || "Uncategorized",
       },
       available: p.available,
-      isVeg: p.isVeg,
       image: p.image,
       variations: p.variations || [],
       addOns: p.addOns || [],

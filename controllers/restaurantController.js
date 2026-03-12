@@ -805,10 +805,12 @@ exports.getRestaurantByIdAdmin = async (req, res) => {
         description: p.description ? p.description.en || p.description : "",
         image: p.image,
         basePrice: p.basePrice,
-        isVeg: p.isVeg,
         variations: p.variations,
         addOns: p.addOns,
         available: p.available,
+        quantity: p.quantity,
+        unit: p.unit,
+        gstPercent: p.gstPercent,
         isBestSeller: false,
       };
       const categoryKey = category._id.toString();
@@ -883,10 +885,12 @@ exports.getRestaurantById = async (req, res) => {
         description: p.description ? p.description.en || p.description : "",
         image: p.image,
         basePrice: p.basePrice,
-        isVeg: p.isVeg,
         variations: p.variations,
         addOns: p.addOns,
         available: p.available,
+        quantity: p.quantity,
+        unit: p.unit,
+        gstPercent: p.gstPercent,
         isBestSeller: false,
       };
       const categoryKey = category._id.toString();
