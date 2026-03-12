@@ -175,7 +175,11 @@ const creditRiderEarnings = async (orderId) => {
     if (!order) throw new Error('Order not found');
     if (!order.rider) throw new Error('Rider not assigned to this order');
     
-    // Use snapshot from order creation (fixed at order time) or fall back to recalculation
+    // Use snapshot fixed at order creation time (System A).
+    // deliveryCharge  = delivery fee charged to customer (slab-based)
+    // platformFee     = full platform fee
+    // incentive       = % of itemTotal
+    // The snapshot is always set in placeOrder; if missing, earnings cannot be determined.
     let earningsBreakdown;
     if (order.riderEarnings && order.riderEarnings.totalRiderEarning > 0) {
       earningsBreakdown = {
@@ -187,24 +191,8 @@ const creditRiderEarnings = async (orderId) => {
         earnedAt: new Date(),
       };
     } else {
-      // Snapshot missing — recalculate from current admin settings as fallback
-      const settings = await getAdminSettings();
-      earningsBreakdown = calculateRiderEarnings(order, settings);
-      // Persist snapshot
-      order.riderEarnings = {
-        deliveryCharge: earningsBreakdown.deliveryCharge,
-        platformFee: earningsBreakdown.platformFee,
-        incentive: earningsBreakdown.incentive,
-        totalRiderEarning: earningsBreakdown.totalRiderEarning,
-        incentivePercentAtCompletion: earningsBreakdown.incentivePercent,
-        earnedAt: earningsBreakdown.earnedAt,
-      };
+      throw new Error(`Rider earnings snapshot missing for order ${orderId}. Cannot credit earnings without a valid snapshot.`);
     }
-    
-    // Also update legacy fields for backward compatibility
-    order.riderEarning = earningsBreakdown.totalRiderEarning;
-    order.riderIncentive = earningsBreakdown.incentive;
-    order.riderIncentivePercent = earningsBreakdown.incentivePercent;
     
     // Get or create rider wallet
     let riderWallet = await RiderWallet.findOne({ rider: order.rider._id });

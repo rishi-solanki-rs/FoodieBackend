@@ -51,13 +51,20 @@ const orderSchema = new mongoose.Schema(
       restaurantBillTotal: { type: Number, default: 0 },
       foodierDiscount: { type: Number, default: 0 },
       gstOnDiscount: { type: Number, default: 0 },
+      // finalPayableToRestaurant = customer-facing: what customer pays toward restaurant bill
+      //   (settlement formula: restaurantBillTotal − discounts + gstOnDiscount)
       finalPayableToRestaurant: { type: Number, default: 0 },
+      // Alias of finalPayableToRestaurant — explicit name for clarity
+      customerRestaurantBill: { type: Number, default: 0 },
+      // restaurantNetEarning = restaurant-facing: what restaurant actually keeps after admin commission
+      //   (= Σ items[].restaurantEarningAmount = itemTotal − adminCommission)
+      restaurantNetEarning: { type: Number, default: 0 },
       gstPercentOnFood: { type: Number, default: 0 },
       gstPercentOnPackaging: { type: Number, default: 0 },
       gstPercentOnDiscount: { type: Number, default: 0 },
       // Settlement clarity fields (v2)
-      restaurantGross: { type: Number, default: 0 },        // itemTotal + packaging
-      restaurantNet: { type: Number, default: 0 },          // restaurantGross - adminCommission
+      restaurantGross: { type: Number, default: 0 },        // itemTotal + packaging (for audit trail)
+      restaurantNet: { type: Number, default: 0 },          // alias for restaurantNetEarning
       riderDeliveryEarning: { type: Number, default: 0 },   // delivery fee credited to rider
       riderIncentive: { type: Number, default: 0 },         // incentive bonus credited to rider
       riderPlatformFeeShare: { type: Number, default: 0 },  // platform fee portion to rider
@@ -174,19 +181,24 @@ const orderSchema = new mongoose.Schema(
     
     // ── Canonical settlement fields (v2) ─────────────────────────────────────
     // Single source of truth for restaurant net earning:
-    //   (itemTotal + packaging) - adminCommission
+    //   Σ items[].restaurantEarningAmount = itemTotal − adminCommission
     restaurantEarning: { type: Number, default: 0 },
 
-    // Admin commission snapshotted at order placement (audit trail)
-    adminCommissionAtOrder: { type: Number, default: 0 },
-
-    // Legacy fields - kept for backward compatibility
-    // Use riderEarnings.totalRiderEarning for new code
-    riderEarning: { type: Number, default: 0 },
-    riderIncentive: { type: Number, default: 0 },
-    riderIncentivePercent: { type: Number, default: 0 },
-    
+    // Admin commission collected at order placement
     adminCommission: { type: Number, default: 0 },
+
+    // ── Deprecated legacy fields — do NOT write to these for new orders ────────
+    // Kept in schema only so old orders stored in MongoDB remain readable.
+    // Use riderEarnings.* and restaurantEarning for all new code.
+    /** @deprecated use riderEarnings.totalRiderEarning */
+    riderEarning: { type: Number, default: 0 },
+    /** @deprecated use riderEarnings.incentive */
+    riderIncentive: { type: Number, default: 0 },
+    /** @deprecated use riderEarnings.incentivePercentAtCompletion */
+    riderIncentivePercent: { type: Number, default: 0 },
+    /** @deprecated use adminCommission */
+    adminCommissionAtOrder: { type: Number, default: 0 },
+    /** @deprecated use restaurantEarning */
     restaurantCommission: { type: Number, default: 0 },
     riderCommission: { type: Number, default: 0 },
     

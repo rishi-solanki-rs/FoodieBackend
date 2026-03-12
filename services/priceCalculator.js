@@ -4,7 +4,7 @@
  * Pricing rules (India, pure-veg app):
  * ─────────────────────────────────────
  * 1. Item total      = sum of (basePrice + variation.price + addOns.price) × qty
- * 2. GST             = per-item GST% (0/5/12/18) applied on that item's base price
+ * 2. GST             = per-item GST% (0/5/12/18) applied on the full line total (base + variation + add-ons)
  * 3. Packaging       = restaurant.packagingCharge (set per restaurant)
  * 4. Platform fee    = global, admin-configurable (default ₹9)
  * 5. Delivery fee    = distance-based slab (admin-configurable):
@@ -138,9 +138,9 @@ async function calculateOrderPrice({
       const lineTotal = unitPrice * qty;
       itemTotal += lineTotal;
 
-      // GST on base price — uses product's slab, falls back to admin default
+      // GST on full line total (base + variation + add-ons) — uses product's slab, falls back to admin default
       const gstPercent = typeof item.gstPercent === 'number' ? item.gstPercent : adminSettings.defaultGstPercent;
-      gstTotal += (item.price * qty) * (gstPercent / 100);
+      gstTotal += lineTotal * (gstPercent / 100);
     }
 
     itemTotal = round(itemTotal);

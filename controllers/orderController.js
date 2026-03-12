@@ -255,8 +255,12 @@ exports.placeOrder = async (req, res) => {
     );
 
     let adminCommission = 0;
+    let restaurantEarningSum = 0;
     const orderItems = cart.items.map((item) => {
-      const lineTotal = (Number(item.price) || 0) * (Number(item.quantity) || 0);
+      // item.price from cart = basePrice + variation.price + Σ addOns.price (set by cartController)
+      // Use it directly as the full unit price so commission covers all three components.
+      const fullUnitPrice = Number(item.price) || 0;
+      const lineTotal = Math.round(fullUnitPrice * (Number(item.quantity) || 0) * 100) / 100;
       const productCommission = productCommissionMap.get(String(item.product));
       const commissionPercent = Number.isFinite(productCommission)
         ? productCommission
@@ -264,6 +268,7 @@ exports.placeOrder = async (req, res) => {
       const itemAdminCommission = Math.round(lineTotal * (commissionPercent / 100) * 100) / 100;
       const itemRestaurantEarning = Math.round((lineTotal - itemAdminCommission) * 100) / 100;
       adminCommission += itemAdminCommission;
+      restaurantEarningSum += itemRestaurantEarning;
 
       return {
         product: item.product,
@@ -279,12 +284,15 @@ exports.placeOrder = async (req, res) => {
       };
     });
     adminCommission = Math.round(adminCommission * 100) / 100;
+    restaurantEarningSum = Math.round(restaurantEarningSum * 100) / 100;
 
     // ── Restaurant Net Earning ────────────────────────────────────────────────
-    // Formula: (itemTotal + packaging) - adminCommission
-    // GST, deliveryFee, and platformFee are NOT part of restaurant earnings
+    // Formula: Σ items[].restaurantEarningAmount  (= itemTotal − adminCommission)
+    // Packaging is tracked separately in paymentBreakdown and goes to the restaurant
+    // in full; it is not subject to commission.
+    // GST, deliveryFee, and platformFee are NOT part of restaurant earnings.
     const restaurantGross = Math.round(((bill.itemTotal || 0) + (bill.packaging || 0)) * 100) / 100;
-    const restaurantNet = Math.max(0, Math.round((restaurantGross - adminCommission) * 100) / 100);
+    const restaurantNet = Math.max(0, restaurantEarningSum);
 
     // ── Rider Earnings ───────────────────────────────────────────────────────
     // Components: deliveryFee + platformFee share + incentive
@@ -293,10 +301,11 @@ exports.placeOrder = async (req, res) => {
     const payoutConfig = adminSettings?.payoutConfig || {};
     const incentivePercent = payoutConfig.riderIncentivePercent ?? 5;
 
-    // Rider delivery charge = full delivery fee collected from customer
+    // Rider delivery charge = full delivery fee collected from customer (System A — snapshot)
     const riderDeliveryCharge = Math.round((bill.deliveryFee || 0) * 100) / 100;
-    // Platform fee: rider receives the full platform fee by default
+    // Platform fee split: rider receives the full platform fee by default (admin share = 0)
     const riderPlatformFeeShare = Math.round((bill.platformFee || 0) * 100) / 100;
+    const adminPlatformFeeShare = Math.round(((bill.platformFee || 0) - riderPlatformFeeShare) * 100) / 100;
     // Incentive: % of item subtotal (before GST/fees)
     const riderIncentiveAmount = Math.max(0, Math.round((bill.itemTotal * (incentivePercent / 100)) * 100) / 100);
 
@@ -311,6 +320,14 @@ exports.placeOrder = async (req, res) => {
     const pickupOtp = Math.floor(1000 + Math.random() * 9000).toString();
     const deliveryOtp = Math.floor(1000 + Math.random() * 9000).toString();
     const otpExpiry = 100 * 60 * 1000; // 100 minutes
+
+    // customerRestaurantBill = what the customer pays toward the restaurant component
+    //   (from settlement calculator: items + GST + packaging − discounts)
+    // restaurantNetEarning   = what the restaurant actually keeps after admin commission
+    //   (= Σ items[].restaurantEarningAmount = itemTotal − adminCommission)
+    // These are two different quantities and must never overwrite each other.
+    const customerRestaurantBill = Math.round(((bill.finalPayableToRestaurant) || 0) * 100) / 100;
+
     const orderDoc = {
       customer: user._id,
       restaurant: restaurantId,
@@ -339,28 +356,26 @@ exports.placeOrder = async (req, res) => {
         restaurantBillTotal: bill.restaurantBillTotal || 0,
         foodierDiscount: bill.foodierDiscount || bill.discount || 0,
         gstOnDiscount: bill.gstOnDiscount || 0,
-        finalPayableToRestaurant: restaurantNet,
-        // Settlement v2 clarity fields
+        // Customer-facing: what customer pays toward restaurant bill (from settlement calculator)
+        finalPayableToRestaurant: customerRestaurantBill,
+        customerRestaurantBill,
+        // Restaurant-facing: what restaurant keeps after admin commission deduction
+        restaurantNetEarning: restaurantNet,
+        // Audit trail fields
         restaurantGross,
         restaurantNet,
         riderDeliveryEarning: riderEarningsData.deliveryCharge,
         riderIncentive: riderIncentiveAmount,
         riderPlatformFeeShare,
-        adminPlatformFeeShare: 0,
+        adminPlatformFeeShare,
         computedVersion: "settlement-v2",
         computedAt: new Date(),
       },
-      // Canonical settlement fields
+      // Canonical settlement fields (single source of truth)
       restaurantEarning: restaurantNet,
-      adminCommissionAtOrder: adminCommission,
       adminCommission,
-      // Structured rider earnings (single source of truth for new code)
+      // Structured rider earnings (single source of truth)
       riderEarnings: riderEarningsData,
-      // Legacy backward-compat fields
-      restaurantCommission: restaurantNet,
-      riderEarning: riderEarningsData.totalRiderEarning,
-      riderIncentive: riderIncentiveAmount,
-      riderIncentivePercent: incentivePercent,
       deliveryAddress: {
         addressLine: deliveryAddress.addressLine,
         coordinates: deliveryAddress.location.coordinates,

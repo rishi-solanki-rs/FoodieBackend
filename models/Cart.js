@@ -4,7 +4,7 @@ const cartItemSchema = new mongoose.Schema({
     restaurant: { type: mongoose.Schema.Types.ObjectId, ref: 'Restaurant', required: true }, // NEW: Track which restaurant
     name: String, // Cache name for display
     image: String, // Cache product image for display
-    price: Number, // Unit price (Base + Variation)
+    price: Number, // Unit price (basePrice + variation.price + Σ addOns.price)
     quantity: { type: Number, required: true, min: 1 },
     variation: {
         _id: String, // Variation ID
