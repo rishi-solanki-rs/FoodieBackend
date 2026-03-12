@@ -95,7 +95,7 @@ const checkServiceAvailability = async (req, res, next) => {
       }
     }
     if (!restaurantId) {
-      return res.status(400).json({ error: 'Restaurant ID is required' });
+    return res.status(400).json({ success: false, message: 'Restaurant ID is required', error: 'Restaurant ID is required' });
     }
     const restaurantCheck = await checkRestaurantAvailability(restaurantId);
     if (!restaurantCheck.available) {
@@ -105,6 +105,8 @@ const checkServiceAvailability = async (req, res, next) => {
         userId: req.user?._id
       });
       return res.status(503).json({
+        success: false,
+        message: restaurantCheck.reason,
         error: 'Service unavailable',
         reason: restaurantCheck.reason,
         type: 'restaurant_unavailable'

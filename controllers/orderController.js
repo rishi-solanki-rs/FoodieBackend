@@ -173,7 +173,8 @@ const calculateBill = async (
 };
 module.exports.calculateBill = calculateBill;
 exports.placeOrder = async (req, res) => {
-  let walletSession = null;
+  let walletDeducted = false;
+  let walletDeductedAmount = 0;
   try {
     const { addressId, paymentMethod, paymentId } = req.body;
     if (!req.user || !isValidObjectId(req.user._id)) {
@@ -218,24 +219,22 @@ exports.placeOrder = async (req, res) => {
     const totalBeforeTip = Math.max(0, totalPayment - tipAmount);
     let paymentStatus = "pending";
     if (paymentMethod === "wallet") {
-      walletSession = await mongoose.startSession();
-      walletSession.startTransaction();
-      // Atomically check balance and deduct — prevents race conditions and negative balances
+      // Atomically check balance and deduct in a single operation — no MongoDB transaction
+      // (transactions require replica set; standalone instances reject them).
+      // The findOneAndUpdate with $gte condition is itself atomic and prevents
+      // race conditions / negative balances without needing a session.
       const updatedUser = await User.findOneAndUpdate(
         { _id: user._id, walletBalance: { $gte: totalPayment } },
         { $inc: { walletBalance: -totalPayment } },
-        { new: true, session: walletSession }
+        { new: true }
       );
       if (!updatedUser) {
-        await walletSession.abortTransaction();
-        walletSession.endSession();
-        walletSession = null;
         return sendError(res, 400, "Insufficient Wallet Balance");
       }
+      walletDeducted = true;
+      walletDeductedAmount = totalPayment;
       user.walletBalance = updatedUser.walletBalance;
       paymentStatus = "paid";
-      // walletSession stays open — Order.create and WalletTransaction.create below
-      // are both in this session so everything rolls back atomically on failure
     } else if (paymentMethod === "online") {
       paymentStatus = "pending";
       logPayment(null, user._id, "online", totalPayment, "pending");
@@ -391,27 +390,17 @@ exports.placeOrder = async (req, res) => {
         description: initialStatusDesc
       }],
     };
-    // Create order in the same session as wallet deduction (wallet payment)
-    // so both roll back atomically if either fails
-    const newOrder = walletSession
-      ? (await Order.create([orderDoc], { session: walletSession }))[0]
-      : await Order.create(orderDoc);
-    // WalletTransaction is created after the order so orderId can be linked
-    if (walletSession) {
-      await WalletTransaction.create(
-        [{
-          user: user._id,
-          amount: -totalPayment,
-          type: "debit",
-          source: 'order_payment',
-          orderId: newOrder._id,
-          description: `Payment for Order #${newOrder._id}`,
-        }],
-        { session: walletSession },
-      );
-      await walletSession.commitTransaction();
-      walletSession.endSession();
-      walletSession = null;
+    const newOrder = await Order.create(orderDoc);
+    // Record wallet transaction after order is created so orderId can be linked
+    if (paymentMethod === "wallet") {
+      await WalletTransaction.create([{
+        user: user._id,
+        amount: -totalPayment,
+        type: "debit",
+        source: 'order_payment',
+        orderId: newOrder._id,
+        description: `Payment for Order #${newOrder._id}`,
+      }]);
       logWalletTransaction(user._id, "debit", totalPayment, null, user.walletBalance);
       logPayment(null, user._id, "wallet", totalPayment, "success");
     }
@@ -478,11 +467,10 @@ exports.placeOrder = async (req, res) => {
       totalPayment
     });
   } catch (error) {
-    // If the wallet session was left open (Order.create failed), abort it
-    // so the wallet deduction and WalletTransaction are both rolled back
-    if (walletSession) {
-      await walletSession.abortTransaction().catch(() => {});
-      walletSession.endSession();
+    // If wallet was deducted but order creation failed, refund atomically (saga compensation)
+    if (walletDeducted) {
+      await User.findByIdAndUpdate(req.user._id, { $inc: { walletBalance: walletDeductedAmount } })
+        .catch(err => logger.error("Wallet compensation refund failed", { error: err.message, userId: req.user._id }));
     }
     console.error("Place order error:", error);
     return sendError(res, 500, "Failed to place order", error.message);
