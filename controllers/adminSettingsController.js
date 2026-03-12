@@ -267,6 +267,9 @@ exports.updatePayoutSettings = async (req, res) => {
       riderBaseDistanceKm: b.riderBaseDistanceKm !== undefined
         ? Math.max(0, Number(b.riderBaseDistanceKm))
         : (cur.riderBaseDistanceKm ?? 3),
+      riderIncentivePercent: b.riderIncentivePercent !== undefined
+        ? clamp(b.riderIncentivePercent, 0, 100)
+        : (cur.riderIncentivePercent ?? 5),
     };
 
     await settings.save();
