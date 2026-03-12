@@ -1668,7 +1668,6 @@ exports.processAdminPayout = async (req, res) => {
   try {
     const AdminCommissionWallet = require('../models/AdminCommissionWallet');
     const PaymentTransaction = require('../models/PaymentTransaction');
-    const paymentService = require('../services/paymentService');
 
     const wallet = await AdminCommissionWallet.getInstance();
 
@@ -1802,13 +1801,9 @@ exports.getRiderTransactions = async (req, res) => {
 
     // Build filter - Only show rider-related transactions
     const riderTypes = [
-      'cod_collected',
-      'cod_deposit',
       'rider_earning_credit',
       'rider_weekly_payout',
       'rider_manual_payout',
-      'rider_freeze',
-      'rider_unfreeze'
     ];
 
     const filter = {

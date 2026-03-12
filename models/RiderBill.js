@@ -26,9 +26,8 @@ const riderBillSchema = new mongoose.Schema(
 
     riderTotalEarning: { type: Number, default: 0 }, // deliveryCharge + platformFeeCredit + incentive + tip
 
-    // ── COD details ───────────────────────────────────────────────────────────
-    paymentMethod: { type: String, enum: ['wallet', 'online', 'cod'] },
-    cashCollected: { type: Number, default: 0 }, // COD cash collected from customer
+    // ── COD details removed (project does not support COD) ──────────────────
+    paymentMethod: { type: String, enum: ['wallet', 'online'] },
 
     generatedAt: { type: Date, default: Date.now },
   },

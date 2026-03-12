@@ -46,8 +46,8 @@ const restaurantSchema = new mongoose.Schema(
     }],
     paymentMethods: {
       type: String,
-      enum: ['COD', 'Online', 'Both'],
-      default: 'Both'
+      enum: ['Online', 'Online Only'],
+      default: 'Online'
     },
     packagingCharge: { type: Number, default: 0 },
     adminCommission: { type: Number, default: 10 },  // ✅ FIXED: 10% default commission instead of 0

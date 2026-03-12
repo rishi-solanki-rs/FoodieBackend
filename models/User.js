@@ -12,7 +12,7 @@ const addressSchema = new mongoose.Schema({
   isDefault: { type: Boolean, default: false },
 });
 const paymentMethodSchema = new mongoose.Schema({
-  type: { type: String, enum: ["Card", "Wallet", "UPI","COD"], required: true },
+  type: { type: String, enum: ["Card", "Wallet", "UPI"], required: true },
   provider: { type: String },
   token: { type: String },
   last4: { type: String },

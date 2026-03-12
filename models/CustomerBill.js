@@ -55,7 +55,7 @@ const customerBillSchema = new mongoose.Schema(
     finalPayableAmount: { type: Number, default: 0 }, // = what customer paid
 
     // ── Payment meta ──────────────────────────────────────────────────────────
-    paymentMethod: { type: String, enum: ['wallet', 'online', 'cod'] },
+    paymentMethod: { type: String, enum: ['wallet', 'online'] },
     paymentStatus: { type: String },
     couponCode:    { type: String },
     generatedAt:   { type: Date, default: Date.now },

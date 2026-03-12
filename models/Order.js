@@ -67,7 +67,7 @@ const orderSchema = new mongoose.Schema(
     },
     paymentMethod: {
       type: String,
-      enum: ["wallet", "online", "cod"],
+      enum: ["wallet", "online"],
     },
     paymentStatus: {
       type: String,
@@ -190,9 +190,6 @@ const orderSchema = new mongoose.Schema(
     restaurantCommission: { type: Number, default: 0 },
     riderCommission: { type: Number, default: 0 },
     
-    cashCollected: { type: Number, default: 0 },
-    cashCollectedAt: { type: Date },
-    cashCollectedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     cancellationReason: { type: String },
     cancellationInitiatedBy: {
       type: String,

@@ -18,13 +18,20 @@ const MAX_RECHARGE = 100000;
  * @returns {Promise<void>}
  */
 async function creditWalletAfterPayment(rechargeOrder, razorpayPaymentId) {
-    if (rechargeOrder.credited) return; // idempotency guard
+    // Atomically claim the recharge order — if another concurrent request already
+    // processed it, findOneAndUpdate returns null and we bail out safely
+    const claimed = await WalletRechargeOrder.findOneAndUpdate(
+        { _id: rechargeOrder._id, credited: false },
+        { $set: { credited: true, razorpayPaymentId, status: 'paid' } },
+        { new: true }
+    );
+    if (!claimed) return; // already processed (idempotency)
 
-    const user = await User.findById(rechargeOrder.user);
-    if (!user) throw new Error('User not found for wallet credit');
-
-    user.walletBalance = (user.walletBalance || 0) + rechargeOrder.amount;
-    await user.save();
+    // Atomic credit — no read-modify-write race
+    await User.findByIdAndUpdate(
+        rechargeOrder.user,
+        { $inc: { walletBalance: rechargeOrder.amount } }
+    );
 
     const txn = await WalletTransaction.create({
         user: rechargeOrder.user,
@@ -37,11 +44,7 @@ async function creditWalletAfterPayment(rechargeOrder, razorpayPaymentId) {
         razorpayPaymentId,
     });
 
-    rechargeOrder.razorpayPaymentId = razorpayPaymentId;
-    rechargeOrder.status = 'paid';
-    rechargeOrder.credited = true;
-    rechargeOrder.walletTransactionId = txn._id;
-    await rechargeOrder.save();
+    await WalletRechargeOrder.findByIdAndUpdate(rechargeOrder._id, { walletTransactionId: txn._id });
 }
 
 // Exported for use by the Razorpay webhook handler in paymentController
@@ -245,22 +248,22 @@ exports.updateWalletBalance = async (req, res) => {
         if (!['credit', 'debit'].includes(type)) {
             return res.status(400).json({ message: "Type must be 'credit' or 'debit'" });
         }
-        const user = await User.findById(userId);
-        if (!user) {
-            return res.status(404).json({ message: "User not found" });
+        const numAmount = Number(amount);
+        if (!Number.isFinite(numAmount) || numAmount <= 0) {
+            return res.status(400).json({ message: "amount must be a positive number" });
         }
-        const newBalance = type === 'credit'
-            ? user.walletBalance + Number(amount)
-            : user.walletBalance - Number(amount);
-        if (newBalance < 0) {
-            return res.status(400).json({ message: "Insufficient wallet balance" });
+        const filter = type === 'debit'
+            ? { _id: userId, walletBalance: { $gte: numAmount } }  // atomic insufficient-balance guard
+            : { _id: userId };
+        const update = { $inc: { walletBalance: type === 'credit' ? numAmount : -numAmount } };
+        const updatedUser = await User.findOneAndUpdate(filter, update, { new: true });
+        if (!updatedUser) {
+            return res.status(400).json({ message: type === 'debit' ? "Insufficient wallet balance" : "User not found" });
         }
-        user.walletBalance = newBalance;
-        await user.save();
         const transaction = await WalletTransaction.create({
             user: userId,
-            amount: amount,
-            type: type,
+            amount: numAmount,
+            type,
             source: type === 'credit' ? 'admin_credit' : 'admin_debit',
             description: description || `Admin ${type} transaction`,
             adminAction: true,
@@ -268,7 +271,7 @@ exports.updateWalletBalance = async (req, res) => {
         });
         res.status(200).json({
             message: "Wallet updated successfully",
-            wallet: { userId: user._id, balance: user.walletBalance },
+            wallet: { userId: updatedUser._id, balance: updatedUser.walletBalance },
             transaction
         });
     } catch (error) {
@@ -343,13 +346,8 @@ exports.getRiderWallet = async (req, res) => {
                 verificationStatus: rider.verificationStatus,
             },
             wallet: {
-                cashInHand: riderWallet.cashInHand,
-                cashLimit: riderWallet.cashLimit,
                 totalEarnings: riderWallet.totalEarnings,
                 availableBalance: riderWallet.availableBalance,
-                isFrozen: riderWallet.isFrozen,
-                frozenAt: riderWallet.frozenAt,
-                frozenReason: riderWallet.frozenReason,
                 lastDepositAt: riderWallet.lastDepositAt,
                 lastDepositAmount: riderWallet.lastDepositAmount,
                 lastPayoutAt: riderWallet.lastPayoutAt,
@@ -384,11 +382,8 @@ exports.getAllRidersWallets = async (req, res) => {
                 riderName: rw.rider?.user?.name,
                 email: rw.rider?.user?.email,
                 mobile: rw.rider?.user?.mobile,
-                cashInHand: rw.cashInHand,
-                cashLimit: rw.cashLimit,
                 totalEarnings: rw.totalEarnings,
                 availableBalance: rw.availableBalance,
-                isFrozen: rw.isFrozen,
                 totalPayouts: rw.totalPayouts,
             })),
         });

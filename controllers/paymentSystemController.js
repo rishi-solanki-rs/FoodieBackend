@@ -1,12 +1,4 @@
 
-const {
-  processCODDelivery,
-  processOnlineDelivery,
-  riderDepositCash,
-  setRiderCashLimit,
-  processWeeklyPayouts,
-  calculateDeliveryCharges
-} = require('../services/paymentService');
 const RiderWallet = require('../models/RiderWallet');
 const RestaurantWallet = require('../models/RestaurantWallet');
 const PaymentTransaction = require('../models/PaymentTransaction');
@@ -15,40 +7,7 @@ const Rider = require('../models/Rider');
 const Restaurant = require('../models/Restaurant');
 const Payout = require('../models/Payout');
 exports.confirmCODCollection = async (req, res) => {
-  try {
-    const { orderId, amountCollected } = req.body;
-    const riderId = req.user._id; // from auth middleware
-    if (!orderId) return res.status(400).json({ success: false, message: 'orderId is required' });
-    const order = await Order.findById(orderId).populate('rider');
-    if (!order) return res.status(404).json({ success: false, message: 'Order not found' });
-    if (!order.rider || order.rider.user.toString() !== riderId.toString()) {
-      const rider = await Rider.findOne({ user: riderId });
-      if (!rider || order.rider._id.toString() !== rider._id.toString()) {
-        return res.status(403).json({ success: false, message: 'Not your order' });
-      }
-    }
-    if (order.paymentMethod !== 'cod') {
-      return res.status(400).json({ success: false, message: 'This is not a COD order' });
-    }
-    if (order.status !== 'delivered') {
-      return res.status(400).json({ success: false, message: 'Order must be delivered first' });
-    }
-    const result = await processCODDelivery(orderId);
-    if (result.riderFrozen) {
-      return res.status(200).json({
-        success: true,
-        message: '⚠️ COD collected but your account is now FROZEN. Please deposit cash to activate your account.',
-        data: result
-      });
-    }
-    return res.status(200).json({
-      success: true,
-      message: 'COD collection confirmed',
-      data: result
-    });
-  } catch (err) {
-    return res.status(500).json({ success: false, message: err.message });
-  }
+  return res.status(410).json({ success: false, message: 'COD is not supported. This endpoint has been removed.' });
 };
 exports.getRiderWallet = async (req, res) => {
   try {
@@ -63,21 +22,13 @@ exports.getRiderWallet = async (req, res) => {
       success: true,
       data: {
         wallet: {
-          cashInHand: wallet.cashInHand,
-          cashLimit: wallet.cashLimit,
           availableBalance: wallet.availableBalance,
           totalEarnings: wallet.totalEarnings,
-          isFrozen: wallet.isFrozen,
-          frozenReason: wallet.frozenReason,
-          frozenAt: wallet.frozenAt,
+          totalPayouts: wallet.totalPayouts,
           lastPayoutAt: wallet.lastPayoutAt,
+          lastPayoutAmount: wallet.lastPayoutAmount,
           lastDepositAt: wallet.lastDepositAt,
         },
-        warning: wallet.isFrozen
-          ? `🚫 Account frozen! You have ₹${wallet.cashInHand} cash. Please deposit to admin to re-activate.`
-          : wallet.cashInHand >= wallet.cashLimit * 0.8
-            ? `⚠️ You have ₹${wallet.cashInHand}/${wallet.cashLimit} cash. Near limit!`
-            : null,
         recentTransactions
       }
     });
@@ -100,55 +51,13 @@ exports.getRiderWalletByAdmin = async (req, res) => {
   }
 };
 exports.riderDepositCash = async (req, res) => {
-  try {
-    const { riderId, amount } = req.body;
-    if (!riderId || !amount || amount <= 0) {
-      return res.status(400).json({ success: false, message: 'riderId and positive amount required' });
-    }
-    const result = await riderDepositCash(riderId, parseFloat(amount), req.user._id);
-    return res.status(200).json({
-      success: true,
-      message: result.unfrozen
-        ? '✅ Cash deposited and rider account UNFROZEN'
-        : `Cash deposited. Rider still has ₹${result.riderWallet.cashInHand} in hand (limit: ₹${result.riderWallet.cashLimit})`,
-      data: result
-    });
-  } catch (err) {
-    return res.status(500).json({ success: false, message: err.message });
-  }
+  return res.status(410).json({ success: false, message: 'COD is not supported. This endpoint has been removed.' });
 };
 exports.setRiderCashLimit = async (req, res) => {
-  try {
-    const { riderId, cashLimit } = req.body;
-    if (!riderId || !cashLimit || cashLimit <= 0) {
-      return res.status(400).json({ success: false, message: 'riderId and cashLimit required' });
-    }
-    const result = await setRiderCashLimit(riderId, parseFloat(cashLimit), req.user._id);
-    return res.status(200).json({ success: true, message: 'Cash limit updated', data: result });
-  } catch (err) {
-    return res.status(500).json({ success: false, message: err.message });
-  }
+  return res.status(410).json({ success: false, message: 'COD is not supported. This endpoint has been removed.' });
 };
 exports.getFrozenRiders = async (req, res) => {
-  try {
-    const frozenWallets = await RiderWallet.find({ isFrozen: true })
-      .populate({ path: 'rider', populate: { path: 'user', select: 'firstName lastName email mobile' } });
-    return res.status(200).json({
-      success: true,
-      count: frozenWallets.length,
-      data: frozenWallets.map(w => ({
-        riderId: w.rider._id,
-        riderName: w.rider.user ? `${w.rider.user.firstName} ${w.rider.user.lastName}` : 'N/A',
-        cashInHand: w.cashInHand,
-        cashLimit: w.cashLimit,
-        frozenAt: w.frozenAt,
-        frozenReason: w.frozenReason,
-        walletId: w._id
-      }))
-    });
-  } catch (err) {
-    return res.status(500).json({ success: false, message: err.message });
-  }
+  return res.status(410).json({ success: false, message: 'COD is not supported. This endpoint has been removed.' });
 };
 exports.getRestaurantWallet = async (req, res) => {
   try {
@@ -195,11 +104,7 @@ exports.getRestaurantWalletByAdmin = async (req, res) => {
 };
 exports.getAdminSummary = async (req, res) => {
   try {
-    const [totalCOD, totalOnline, totalCommission, totalPaidOut, frozenCount, pendingPayouts] = await Promise.all([
-      PaymentTransaction.aggregate([
-        { $match: { type: 'cod_collected' } },
-        { $group: { _id: null, total: { $sum: '$amount' } } }
-      ]),
+    const [totalOnline, totalCommission, totalPaidOut, pendingPayouts] = await Promise.all([
       PaymentTransaction.aggregate([
         { $match: { type: { $in: ['online_payment', 'wallet_payment'] } } },
         { $group: { _id: null, total: { $sum: '$amount' } } }
@@ -209,20 +114,17 @@ exports.getAdminSummary = async (req, res) => {
         { $group: { _id: null, total: { $sum: '$amount' } } }
       ]),
       PaymentTransaction.aggregate([
-        { $match: { type: { $in: ['restaurant_weekly_payout', 'rider_weekly_payout'] } } },
+        { $match: { type: { $in: ['restaurant_weekly_payout', 'rider_weekly_payout', 'restaurant_manual_payout', 'rider_manual_payout'] } } },
         { $group: { _id: null, total: { $sum: '$amount' } } }
       ]),
-      RiderWallet.countDocuments({ isFrozen: true }),
       RestaurantWallet.aggregate([{ $group: { _id: null, total: { $sum: '$balance' } } }]),
     ]);
     return res.status(200).json({
       success: true,
       data: {
-        totalCODCollected: totalCOD[0]?.total || 0,
         totalOnlinePayments: totalOnline[0]?.total || 0,
         totalCommissionEarned: totalCommission[0]?.total || 0,
         totalPaidOut: totalPaidOut[0]?.total || 0,
-        frozenRidersCount: frozenCount,
         pendingRestaurantPayouts: pendingPayouts[0]?.total || 0,
       }
     });
@@ -231,25 +133,29 @@ exports.getAdminSummary = async (req, res) => {
   }
 };
 exports.triggerWeeklyPayout = async (req, res) => {
-  try {
-    const results = await processWeeklyPayouts();
-    return res.status(200).json({
-      success: true,
-      message: `Payout complete: ${results.restaurants.length} restaurants, ${results.riders.length} riders`,
-      data: results
-    });
-  } catch (err) {
-    return res.status(500).json({ success: false, message: err.message });
-  }
+  return res.status(501).json({ success: false, message: 'Automated weekly payouts are not implemented. Use the manual payout endpoints instead.' });
 };
 exports.calculateDeliveryFee = async (req, res) => {
   try {
     const { distanceKm } = req.body;
-    if (distanceKm === undefined) {
-      return res.status(400).json({ success: false, message: 'distanceKm is required' });
+    const dist = parseFloat(distanceKm);
+    if (distanceKm === undefined || isNaN(dist) || dist < 0) {
+      return res.status(400).json({ success: false, message: 'distanceKm must be a non-negative number' });
     }
-    const result = calculateDeliveryCharges(parseFloat(distanceKm));
-    return res.status(200).json({ success: true, data: result });
+    const AdminSetting = require('../models/AdminSetting');
+    const settings = await AdminSetting.findOne().lean();
+    const baseFee = settings?.deliveryBaseCharge || 20;
+    const perKmRate = settings?.deliveryPerKmCharge || 5;
+    const deliveryCharge = baseFee + (dist * perKmRate);
+    return res.status(200).json({
+      success: true,
+      data: {
+        distanceKm: dist,
+        baseFee,
+        perKmRate,
+        deliveryCharge: Math.round(deliveryCharge)
+      }
+    });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }
@@ -324,7 +230,7 @@ exports.getAllRiderWallets = async (req, res) => {
           email: rider.user?.email,
           totalDeliveries: rider.totalDeliveries || 0,
           averageRating: rider.averageRating || 0,
-          wallet: wallet || { availableBalance: 0, totalEarnings: 0, cashInHand: 0 }
+          wallet: wallet || { availableBalance: 0, totalEarnings: 0, totalPayouts: 0 }
         };
       })
     );

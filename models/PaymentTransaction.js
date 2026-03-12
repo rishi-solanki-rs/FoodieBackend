@@ -7,8 +7,6 @@ const paymentTransactionSchema = new mongoose.Schema({
   type: {
     type: String,
     enum: [
-      'cod_collected',          // Rider collected cash from customer
-      'cod_deposit',            // Rider deposited cash to admin
       'rider_earning_credit',   // Platform credits rider for delivery
       'rider_weekly_payout',    // Weekly payout to rider
       'rider_manual_payout',    // Manual payout by admin
@@ -17,8 +15,6 @@ const paymentTransactionSchema = new mongoose.Schema({
       'restaurant_manual_payout', // Manual payout to restaurant by admin
       'admin_commission_payout', // Admin commission payout
       'distance_surcharge',     // Extra fee for distance > 2km
-      'rider_freeze',           // Rider account frozen
-      'rider_unfreeze',         // Rider account unfrozen
       'online_payment',         // Customer paid online
       'wallet_payment',         // Customer paid via wallet
       'refund',                 // Refund issued

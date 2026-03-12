@@ -715,10 +715,6 @@ exports.getRiderDashboard = async (req, res) => {
       wallet: riderWallet ? {
         availableBalance: Number((riderWallet.availableBalance || 0).toFixed(2)),
         totalEarnings: Number((riderWallet.totalEarnings || 0).toFixed(2)),
-        cashInHand: Number((riderWallet.cashInHand || 0).toFixed(2)),
-        cashLimit: riderWallet.cashLimit || 2000,
-        isFrozen: riderWallet.isFrozen || false,
-        frozenReason: riderWallet.frozenReason || null,
         lastPayoutAt: riderWallet.lastPayoutAt || null,
         lastPayoutAmount: riderWallet.lastPayoutAmount || 0,
         totalPayouts: riderWallet.totalPayouts || 0,
@@ -1122,10 +1118,6 @@ exports.getEarningsSummary = async (req, res) => {
       wallet: wallet ? {
         availableBalance: Number((wallet.availableBalance || 0).toFixed(2)),
         totalEarnings: Number((wallet.totalEarnings || 0).toFixed(2)),
-        cashInHand: Number((wallet.cashInHand || 0).toFixed(2)),
-        cashLimit: wallet.cashLimit || 2000,
-        isFrozen: wallet.isFrozen || false,
-        frozenReason: wallet.frozenReason || null,
         lastPayoutAt: wallet.lastPayoutAt || null,
         lastPayoutAmount: wallet.lastPayoutAmount || 0,
       } : null,
@@ -2651,23 +2643,31 @@ exports.verifyDelivery = async (req, res) => {
       by: "system",
       description: "Order has been delivered"
     });
-    if (order.paymentMethod === 'cod') {
-      order.paymentStatus = 'paid';
-      order.cashCollected = order.totalAmount;
-      order.cashCollectedAt = new Date();
-      order.cashCollectedBy = req.user._id;
-    }
     await order.save();
     let settlementPayload = null;
     try {
-      const { processCODDelivery, processOnlineDelivery } = require('../services/paymentService');
-      const Restaurant = require('../models/Restaurant');
+      const riderEarningSvc = require('../services/riderEarningsService');
       const RiderWallet = require('../models/RiderWallet');
       const RestaurantWallet = require('../models/RestaurantWallet');
+      const PaymentTransaction = require('../models/PaymentTransaction');
 
-      const settlementResult = order.paymentMethod === 'cod'
-        ? await processCODDelivery(order._id)
-        : await processOnlineDelivery(order._id);
+      const earningsResult = await riderEarningSvc.creditRiderEarnings(order._id);
+
+      if (order.restaurantEarning > 0) {
+        await RestaurantWallet.findOneAndUpdate(
+          { restaurant: order.restaurant },
+          { $inc: { balance: order.restaurantEarning, totalEarnings: order.restaurantEarning } },
+          { upsert: true, new: true }
+        );
+        await PaymentTransaction.create({
+          order: order._id,
+          restaurant: order.restaurant,
+          type: 'restaurant_commission',
+          amount: order.restaurantEarning,
+          status: 'completed',
+          note: `Restaurant earning for order #${order.orderNumber || order._id}`,
+        });
+      }
 
       const [riderWallet, restaurantWallet] = await Promise.all([
         RiderWallet.findOne({ rider: riderProfile._id }).lean(),
@@ -2676,20 +2676,18 @@ exports.verifyDelivery = async (req, res) => {
 
       settlementPayload = {
         orderId: order._id,
-        status: settlementResult?.alreadyProcessed ? 'already_processed' : 'processed',
+        status: earningsResult?.alreadyProcessed ? 'already_processed' : 'processed',
         paymentMethod: order.paymentMethod,
         rider: riderWallet ? {
           availableBalance: Number((riderWallet.availableBalance || 0).toFixed(2)),
           totalEarnings: Number((riderWallet.totalEarnings || 0).toFixed(2)),
-          cashInHand: Number((riderWallet.cashInHand || 0).toFixed(2)),
-          isFrozen: !!riderWallet.isFrozen,
         } : null,
         restaurant: restaurantWallet ? {
           balance: Number((restaurantWallet.balance || 0).toFixed(2)),
           totalEarnings: Number((restaurantWallet.totalEarnings || 0).toFixed(2)),
           pendingAmount: Number((restaurantWallet.pendingAmount || 0).toFixed(2)),
         } : null,
-        breakdown: settlementResult?.breakdown || null,
+        breakdown: earningsResult?.breakdown || null,
         timestamp: new Date(),
       };
 
@@ -2697,11 +2695,9 @@ exports.verifyDelivery = async (req, res) => {
       socketService.emitToRestaurant(order.restaurant.toString(), 'restaurant:earnings_updated', settlementPayload);
       socketService.emitToAdmin('earnings:updated', settlementPayload);
 
+      const Restaurant = require('../models/Restaurant');
       Restaurant.findByIdAndUpdate(order.restaurant, {
-        $inc: {
-          totalDeliveries: 1,
-          successfulOrders: 1,
-        }
+        $inc: { totalDeliveries: 1, successfulOrders: 1 }
       }).catch(err => console.error('Restaurant stat update failed:', err.message));
     } catch (payErr) {
       console.error('Failed to trigger earnings on delivery:', payErr.message);
@@ -2978,56 +2974,7 @@ exports.resendDeliveryOTP = async (req, res) => {
   }
 };
 exports.riderCollectCash = async (req, res) => {
-  try {
-    const Order = require('../models/Order');
-    const { amount } = req.body;
-    const order = await Order.findById(req.params.id);
-    const riderProfile = await Rider.findOne({ user: req.user._id });
-    if (!riderProfile) {
-      return res.status(403).json({ message: "Rider profile not found" });
-    }
-    if (
-      !order ||
-      !order.rider ||
-      order.rider.toString() !== riderProfile._id.toString()
-    )
-      return res.status(403).json({ message: "Not assigned to you" });
-    if (order.paymentMethod !== "cod")
-      return res.status(400).json({ message: "Order is not Cash On Delivery" });
-    const collected = Number(amount || order.totalAmount);
-    order.cashCollected = collected;
-    order.cashCollectedAt = new Date();
-    order.cashCollectedBy = riderProfile._id; // store rider user id
-    order.paymentStatus = 'paid';
-    await order.save();
-    const socketService = require('../services/socketService');
-    socketService.emitToCustomer(order.customer.toString(), 'order:status', {
-      orderId: order._id,
-      status: order.status,
-      paymentStatus: 'paid',
-      timestamp: new Date(),
-      timeline: order.timeline
-    });
-    socketService.emitToRestaurant(order.restaurant.toString(), 'order:status', {
-      orderId: order._id,
-      status: order.status,
-      paymentStatus: 'paid',
-      timestamp: new Date(),
-      timeline: order.timeline
-    });
-    socketService.emitToAdmin('order:status', {
-      orderId: order._id,
-      status: order.status,
-      paymentStatus: 'paid',
-      totalAmount: order.totalAmount,
-      amount: order.totalAmount,
-      timestamp: new Date(),
-      timeline: order.timeline
-    });
-    res.status(200).json({ message: "Cash collected recorded", order });
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
+  return res.status(410).json({ message: "COD is not supported. This endpoint has been removed." });
 };
 exports.getAvailableOrders = async (req, res) => {
   try {

@@ -173,6 +173,7 @@ const calculateBill = async (
 };
 module.exports.calculateBill = calculateBill;
 exports.placeOrder = async (req, res) => {
+  let walletSession = null;
   try {
     const { addressId, paymentMethod, paymentId } = req.body;
     if (!req.user || !isValidObjectId(req.user._id)) {
@@ -216,57 +217,28 @@ exports.placeOrder = async (req, res) => {
     const tipAmount = bill.tip || 0;
     const totalBeforeTip = Math.max(0, totalPayment - tipAmount);
     let paymentStatus = "pending";
-    let paymentFailure = null;
     if (paymentMethod === "wallet") {
-      if (user.walletBalance < totalPayment) {
+      walletSession = await mongoose.startSession();
+      walletSession.startTransaction();
+      // Atomically check balance and deduct — prevents race conditions and negative balances
+      const updatedUser = await User.findOneAndUpdate(
+        { _id: user._id, walletBalance: { $gte: totalPayment } },
+        { $inc: { walletBalance: -totalPayment } },
+        { new: true, session: walletSession }
+      );
+      if (!updatedUser) {
+        await walletSession.abortTransaction();
+        walletSession.endSession();
+        walletSession = null;
         return sendError(res, 400, "Insufficient Wallet Balance");
       }
-      const session = await mongoose.startSession();
-      session.startTransaction();
-      try {
-        user.walletBalance -= totalPayment;
-        await user.save({ session });
-        await WalletTransaction.create(
-          [
-            {
-              user: user._id,
-              amount: -totalPayment,
-              type: "debit",
-              description: `Payment for Order`,
-            },
-          ],
-          { session },
-        );
-        await session.commitTransaction();
-        paymentStatus = "paid";
-        logWalletTransaction(
-          user._id,
-          "debit",
-          totalPayment,
-          null,
-          user.walletBalance,
-        );
-        logPayment(null, user._id, "wallet", totalPayment, "success");
-      } catch (walletError) {
-        await session.abortTransaction();
-        logPayment(
-          null,
-          user._id,
-          "wallet",
-          totalPayment,
-          "failed",
-          walletError,
-        );
-        throw new Error(`Wallet transaction failed: ${walletError.message}`);
-      } finally {
-        session.endSession();
-      }
+      user.walletBalance = updatedUser.walletBalance;
+      paymentStatus = "paid";
+      // walletSession stays open — Order.create and WalletTransaction.create below
+      // are both in this session so everything rolls back atomically on failure
     } else if (paymentMethod === "online") {
       paymentStatus = "pending";
       logPayment(null, user._id, "online", totalPayment, "pending");
-    }
-    if (paymentStatus === "failed") {
-      return sendError(res, 400, paymentFailure ? paymentFailure.reason : "Payment failed");
     }
     const isOnlineOrder = paymentMethod === "online";
     const initialStatus = isOnlineOrder ? "pending" : "placed";
@@ -339,7 +311,7 @@ exports.placeOrder = async (req, res) => {
     const pickupOtp = Math.floor(1000 + Math.random() * 9000).toString();
     const deliveryOtp = Math.floor(1000 + Math.random() * 9000).toString();
     const otpExpiry = 100 * 60 * 1000; // 100 minutes
-    const newOrder = await Order.create({
+    const orderDoc = {
       customer: user._id,
       restaurant: restaurantId,
       idempotencyKey: `${cart._id}-${restaurantId}`,
@@ -403,7 +375,31 @@ exports.placeOrder = async (req, res) => {
         by: "system",
         description: initialStatusDesc
       }],
-    });
+    };
+    // Create order in the same session as wallet deduction (wallet payment)
+    // so both roll back atomically if either fails
+    const newOrder = walletSession
+      ? (await Order.create([orderDoc], { session: walletSession }))[0]
+      : await Order.create(orderDoc);
+    // WalletTransaction is created after the order so orderId can be linked
+    if (walletSession) {
+      await WalletTransaction.create(
+        [{
+          user: user._id,
+          amount: -totalPayment,
+          type: "debit",
+          source: 'order_payment',
+          orderId: newOrder._id,
+          description: `Payment for Order #${newOrder._id}`,
+        }],
+        { session: walletSession },
+      );
+      await walletSession.commitTransaction();
+      walletSession.endSession();
+      walletSession = null;
+      logWalletTransaction(user._id, "debit", totalPayment, null, user.walletBalance);
+      logPayment(null, user._id, "wallet", totalPayment, "success");
+    }
     await User.findByIdAndUpdate(user._id, { $inc: { totalOrders: 1, totalAmountSpent: bill.toPay } });
     await Restaurant.findByIdAndUpdate(restaurantId, { $inc: { totalOrders: 1 } });
     logOrderTransition(newOrder._id, null, initialStatus, user._id, "customer", `Order placed via ${paymentMethod}`);
@@ -467,6 +463,12 @@ exports.placeOrder = async (req, res) => {
       totalPayment
     });
   } catch (error) {
+    // If the wallet session was left open (Order.create failed), abort it
+    // so the wallet deduction and WalletTransaction are both rolled back
+    if (walletSession) {
+      await walletSession.abortTransaction().catch(() => {});
+      walletSession.endSession();
+    }
     console.error("Place order error:", error);
     return sendError(res, 500, "Failed to place order", error.message);
   }
@@ -1027,7 +1029,7 @@ exports.customerCancelOrder = async (req, res) => {
       by: 'customer',
       description: 'Order cancelled by customer'
     });
-    if (order.paymentStatus === 'paid' && order.paymentMethod !== 'cod') {
+    if (order.paymentStatus === 'paid') {
       const user = await User.findById(order.customer).session(session);
       user.walletBalance = (user.walletBalance || 0) + refundAmount;
       await user.save({ session });
@@ -1036,6 +1038,7 @@ exports.customerCancelOrder = async (req, res) => {
         user: user._id,
         amount: refundAmount,
         type: 'credit',
+        source: 'refund',
         description: `Cancellation refund (${refundPercentage}%) - Order ${order._id.toString().slice(-6)}`,
         orderId: order._id
       }], { session });
@@ -1047,8 +1050,6 @@ exports.customerCancelOrder = async (req, res) => {
         method: 'wallet',
         note: `Customer cancellation (${refundPercentage}% refund)`
       };
-    } else if (order.paymentMethod === 'cod') {
-      order.paymentStatus = 'cancelled';
     }
     await order.save({ session });
     if (['placed', 'accepted'].includes(oldStatus)) {
@@ -1445,33 +1446,52 @@ exports.updateOrderStatus = async (req, res) => {
         { new: true },
       );
       try {
-        const { processCODDelivery, processOnlineDelivery } = require('../services/paymentService');
+        const riderEarningsSvc = require('../services/riderEarningsService');
         const RiderWallet = require('../models/RiderWallet');
         const RestaurantWallet = require('../models/RestaurantWallet');
-        const settlementResult = order.paymentMethod === 'cod'
-          ? await processCODDelivery(order._id)
-          : await processOnlineDelivery(order._id);
+        const PaymentTransaction = require('../models/PaymentTransaction');
+        // Credit rider earnings using snapshot stored at order creation
+        await riderEarningsSvc.creditRiderEarnings(order._id);
+        // Credit restaurant wallet
+        let restaurantWallet = await RestaurantWallet.findOne({ restaurant: order.restaurant });
+        if (!restaurantWallet) {
+          restaurantWallet = await RestaurantWallet.create({ restaurant: order.restaurant });
+        }
+        const restaurantNet = order.restaurantEarning || order.restaurantCommission || 0;
+        if (restaurantNet > 0) {
+          restaurantWallet.balance = (restaurantWallet.balance || 0) + restaurantNet;
+          restaurantWallet.totalEarnings = (restaurantWallet.totalEarnings || 0) + restaurantNet;
+          restaurantWallet.pendingAmount = (restaurantWallet.pendingAmount || 0) + restaurantNet;
+          await restaurantWallet.save();
+        }
+        // Audit record for restaurant earning
+        await PaymentTransaction.create({
+          order: order._id,
+          restaurant: order.restaurant,
+          user: order.customer,
+          type: 'restaurant_commission',
+          amount: restaurantNet,
+          status: 'completed',
+          note: `Restaurant earning credited for order #${order._id.toString().slice(-6)}`,
+        });
         if (order.rider) {
-          const [riderWallet, restaurantWallet] = await Promise.all([
+          const [riderWallet, updatedRestaurantWallet] = await Promise.all([
             RiderWallet.findOne({ rider: order.rider }).lean(),
             RestaurantWallet.findOne({ restaurant: order.restaurant }).lean(),
           ]);
           const settlementPayload = {
             orderId: order._id,
-            status: settlementResult?.alreadyProcessed ? 'already_processed' : 'processed',
+            status: 'processed',
             paymentMethod: order.paymentMethod,
             rider: riderWallet ? {
               availableBalance: Number((riderWallet.availableBalance || 0).toFixed(2)),
               totalEarnings: Number((riderWallet.totalEarnings || 0).toFixed(2)),
-              cashInHand: Number((riderWallet.cashInHand || 0).toFixed(2)),
-              isFrozen: !!riderWallet.isFrozen,
             } : null,
-            restaurant: restaurantWallet ? {
-              balance: Number((restaurantWallet.balance || 0).toFixed(2)),
-              totalEarnings: Number((restaurantWallet.totalEarnings || 0).toFixed(2)),
-              pendingAmount: Number((restaurantWallet.pendingAmount || 0).toFixed(2)),
+            restaurant: updatedRestaurantWallet ? {
+              balance: Number((updatedRestaurantWallet.balance || 0).toFixed(2)),
+              totalEarnings: Number((updatedRestaurantWallet.totalEarnings || 0).toFixed(2)),
+              pendingAmount: Number((updatedRestaurantWallet.pendingAmount || 0).toFixed(2)),
             } : null,
-            breakdown: settlementResult?.breakdown || null,
             timestamp: new Date(),
           };
           socketService.emitToRider(order.rider.toString(), 'rider:earnings_updated', settlementPayload);
@@ -2340,12 +2360,6 @@ exports.adminUpdateStatus = async (req, res) => {
     order.status = status;
     if (status === "delivered" && oldStatus !== "delivered") {
       order.deliveredAt = new Date();
-      if (order.paymentMethod === "cod") {
-        order.paymentStatus = "paid";
-        order.cashCollected = order.totalAmount;
-        order.cashCollectedAt = new Date();
-        order.cashCollectedBy = req.user?._id;
-      }
     }
     order.timeline.push({
       status: status,
@@ -2367,33 +2381,51 @@ exports.adminUpdateStatus = async (req, res) => {
       );
 
       try {
-        const { processCODDelivery, processOnlineDelivery } = require('../services/paymentService');
+        const riderEarningsSvc = require('../services/riderEarningsService');
         const RiderWallet = require('../models/RiderWallet');
         const RestaurantWallet = require('../models/RestaurantWallet');
-        const settlementResult = order.paymentMethod === 'cod'
-          ? await processCODDelivery(order._id)
-          : await processOnlineDelivery(order._id);
+        const PaymentTransaction = require('../models/PaymentTransaction');
+        // Credit rider earnings using snapshot stored at order creation
+        await riderEarningsSvc.creditRiderEarnings(order._id);
+        // Credit restaurant wallet
+        let restaurantWallet = await RestaurantWallet.findOne({ restaurant: order.restaurant });
+        if (!restaurantWallet) {
+          restaurantWallet = await RestaurantWallet.create({ restaurant: order.restaurant });
+        }
+        const restaurantNet = order.restaurantEarning || order.restaurantCommission || 0;
+        if (restaurantNet > 0) {
+          restaurantWallet.balance = (restaurantWallet.balance || 0) + restaurantNet;
+          restaurantWallet.totalEarnings = (restaurantWallet.totalEarnings || 0) + restaurantNet;
+          restaurantWallet.pendingAmount = (restaurantWallet.pendingAmount || 0) + restaurantNet;
+          await restaurantWallet.save();
+        }
+        await PaymentTransaction.create({
+          order: order._id,
+          restaurant: order.restaurant,
+          user: order.customer,
+          type: 'restaurant_commission',
+          amount: restaurantNet,
+          status: 'completed',
+          note: `Restaurant earning credited for order #${order._id.toString().slice(-6)}`,
+        });
         if (order.rider) {
-          const [riderWallet, restaurantWallet] = await Promise.all([
+          const [riderWallet, updatedRestaurantWallet] = await Promise.all([
             RiderWallet.findOne({ rider: order.rider }).lean(),
             RestaurantWallet.findOne({ restaurant: order.restaurant }).lean(),
           ]);
           const settlementPayload = {
             orderId: order._id,
-            status: settlementResult?.alreadyProcessed ? 'already_processed' : 'processed',
+            status: 'processed',
             paymentMethod: order.paymentMethod,
             rider: riderWallet ? {
               availableBalance: Number((riderWallet.availableBalance || 0).toFixed(2)),
               totalEarnings: Number((riderWallet.totalEarnings || 0).toFixed(2)),
-              cashInHand: Number((riderWallet.cashInHand || 0).toFixed(2)),
-              isFrozen: !!riderWallet.isFrozen,
             } : null,
-            restaurant: restaurantWallet ? {
-              balance: Number((restaurantWallet.balance || 0).toFixed(2)),
-              totalEarnings: Number((restaurantWallet.totalEarnings || 0).toFixed(2)),
-              pendingAmount: Number((restaurantWallet.pendingAmount || 0).toFixed(2)),
+            restaurant: updatedRestaurantWallet ? {
+              balance: Number((updatedRestaurantWallet.balance || 0).toFixed(2)),
+              totalEarnings: Number((updatedRestaurantWallet.totalEarnings || 0).toFixed(2)),
+              pendingAmount: Number((updatedRestaurantWallet.pendingAmount || 0).toFixed(2)),
             } : null,
-            breakdown: settlementResult?.breakdown || null,
             timestamp: new Date(),
           };
           socketService.emitToRider(order.rider.toString(), 'rider:earnings_updated', settlementPayload);

@@ -99,7 +99,7 @@ settlementLedgerSchema.virtual('settlementAge').get(function() {
   return ageInDays;
 });
 settlementLedgerSchema.statics.createFromOrder = async function(order, restaurant) {
-  const commissionPercent = restaurant.commissionRate || 15;
+  const commissionPercent = restaurant.adminCommission || 15;
   const baseAmount = order.totalAmount - (order.tip || 0);
   const platformCommission = (baseAmount * commissionPercent) / 100;
   const restaurantEarning = baseAmount - platformCommission - (order.deliveryFee || 0);

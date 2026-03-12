@@ -163,9 +163,7 @@ const getAdminSettings = async () => {
  * After order is delivered:
  * 1. Calculate earnings breakdown
  * 2. Add to rider wallet (totalEarnings and availableBalance)
- * 3. Add COD cash to rider's cashInHand (if COD order)
- * 4. Create payment transaction record
- * 5. Check if rider account needs to be frozen (cash limit exceeded)
+ * 3. Create payment transaction record
  * 
  * @param {string} orderId - Order ID
  * @returns {object} - Result with wallet updates and transaction record
@@ -177,21 +175,31 @@ const creditRiderEarnings = async (orderId) => {
     if (!order) throw new Error('Order not found');
     if (!order.rider) throw new Error('Rider not assigned to this order');
     
-    // Get admin settings
-    const settings = await getAdminSettings();
-    
-    // Calculate rider earnings breakdown
-    const earningsBreakdown = calculateRiderEarnings(order, settings);
-    
-    // Update order with earnings breakdown
-    order.riderEarnings = {
-      deliveryCharge: earningsBreakdown.deliveryCharge,
-      platformFee: earningsBreakdown.platformFee,
-      incentive: earningsBreakdown.incentive,
-      totalRiderEarning: earningsBreakdown.totalRiderEarning,
-      incentivePercentAtCompletion: earningsBreakdown.incentivePercent,
-      earnedAt: earningsBreakdown.earnedAt
-    };
+    // Use snapshot from order creation (fixed at order time) or fall back to recalculation
+    let earningsBreakdown;
+    if (order.riderEarnings && order.riderEarnings.totalRiderEarning > 0) {
+      earningsBreakdown = {
+        deliveryCharge: order.riderEarnings.deliveryCharge,
+        platformFee: order.riderEarnings.platformFee,
+        incentive: order.riderEarnings.incentive,
+        incentivePercent: order.riderEarnings.incentivePercentAtCompletion,
+        totalRiderEarning: order.riderEarnings.totalRiderEarning,
+        earnedAt: new Date(),
+      };
+    } else {
+      // Snapshot missing — recalculate from current admin settings as fallback
+      const settings = await getAdminSettings();
+      earningsBreakdown = calculateRiderEarnings(order, settings);
+      // Persist snapshot
+      order.riderEarnings = {
+        deliveryCharge: earningsBreakdown.deliveryCharge,
+        platformFee: earningsBreakdown.platformFee,
+        incentive: earningsBreakdown.incentive,
+        totalRiderEarning: earningsBreakdown.totalRiderEarning,
+        incentivePercentAtCompletion: earningsBreakdown.incentivePercent,
+        earnedAt: earningsBreakdown.earnedAt,
+      };
+    }
     
     // Also update legacy fields for backward compatibility
     order.riderEarning = earningsBreakdown.totalRiderEarning;
@@ -207,14 +215,6 @@ const creditRiderEarnings = async (orderId) => {
     // Update wallet: add to total earnings and available balance
     riderWallet.totalEarnings += earningsBreakdown.totalRiderEarning;
     riderWallet.availableBalance += earningsBreakdown.totalRiderEarning;
-    
-    // For COD orders: add customer payment to rider's cashInHand
-    let wasRiderFrozen = false;
-    if (order.paymentMethod === 'cod') {
-      riderWallet.cashInHand += order.totalAmount;
-      // Check if cash limit is exceeded
-      wasRiderFrozen = riderWallet.checkAndFreeze();
-    }
     
     // Save wallet
     await riderWallet.save();
@@ -233,7 +233,6 @@ const creditRiderEarnings = async (orderId) => {
         incentive: earningsBreakdown.incentive,
         totalRiderEarning: earningsBreakdown.totalRiderEarning,
         riderIncentivePercent: earningsBreakdown.incentivePercent,
-        codCollected: order.paymentMethod === 'cod' ? order.totalAmount : 0,
       },
       deliveryDistanceKm: order.deliveryDistanceKm,
       status: 'completed',
@@ -250,13 +249,8 @@ const creditRiderEarnings = async (orderId) => {
       walletUpdated: {
         totalEarnings: riderWallet.totalEarnings,
         availableBalance: riderWallet.availableBalance,
-        cashInHand: riderWallet.cashInHand,
-        isFrozen: riderWallet.isFrozen,
-        frozenReason: riderWallet.frozenReason
       },
-      message: wasRiderFrozen 
-        ? `⚠️ Earnings credited but account frozen: ₹${riderWallet.cashInHand} COD cash collected. Please deposit to re-activate.`
-        : `✅ Earnings credited: ₹${earningsBreakdown.totalRiderEarning}`
+      message: `✅ Earnings credited: ₹${earningsBreakdown.totalRiderEarning}`
     };
   } catch (error) {
     console.error('Error crediting rider earnings:', error);
@@ -392,12 +386,8 @@ const getRiderWalletWithEarnings = async (riderId) => {
     return {
       success: true,
       wallet: {
-        cashInHand: wallet.cashInHand,
-        cashLimit: wallet.cashLimit,
         availableBalance: wallet.availableBalance,
         totalEarnings: wallet.totalEarnings,
-        isFrozen: wallet.isFrozen,
-        frozenReason: wallet.frozenReason,
         lastPayoutAt: wallet.lastPayoutAt,
         lastPayoutAmount: wallet.lastPayoutAmount
       },

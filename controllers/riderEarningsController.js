@@ -108,7 +108,6 @@ exports.getEarningsSummary = async (req, res) => {
                 totalPayouts: r2(wallet.totalPayouts || 0),
                 lastPayoutAt: wallet.lastPayoutAt || null,
                 lastPayoutAmount: r2(wallet.lastPayoutAmount || 0),
-                isFrozen: wallet.isFrozen || false,
             } : null,
         });
     } catch (err) {
@@ -298,11 +297,6 @@ exports.getPayoutHistory = async (req, res) => {
                 totalPayouts: r2(wallet.totalPayouts || 0),
                 lastPayoutAt: wallet.lastPayoutAt || null,
                 lastPayoutAmount: r2(wallet.lastPayoutAmount || 0),
-                cashInHand: r2(wallet.cashInHand || 0),
-                cashLimit: wallet.cashLimit || 2000,
-                isFrozen: wallet.isFrozen || false,
-                frozenReason: wallet.frozenReason || null,
-                transactions: wallet.transactions || [],
             },
         });
     } catch (err) {

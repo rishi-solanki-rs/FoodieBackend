@@ -7,7 +7,7 @@ const validatePlaceOrder = [
         .custom(val => isValidObjectId(val)).withMessage('Invalid addressId'),
     body('paymentMethod')
         .notEmpty().withMessage('paymentMethod is required')
-        .isIn(['wallet', 'online', 'cod']).withMessage('Invalid paymentMethod. Must be wallet, online, or cod'),
+        .isIn(['wallet', 'online']).withMessage('Invalid paymentMethod. Must be wallet or online'),
     body('paymentId')
         .optional()
         .isString().withMessage('paymentId must be a string'),
