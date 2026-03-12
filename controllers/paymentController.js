@@ -2,6 +2,7 @@ const crypto = require("crypto");
 const Order = require("../models/Order");
 const Cart = require("../models/Cart");
 const Promocode = require("../models/Promocode");
+const WalletRechargeOrder = require("../models/WalletRechargeOrder");
 const { getRazorpay } = require("../services/razorpayService");
 const socketService = require("../services/socketService");
 const { logger, logOrderTransition, logPayment, logCouponUsage } = require("../utils/logger");
@@ -249,7 +250,12 @@ exports.handleRazorpayWebhook = async (req, res) => {
 
     try {
         if (event === "payment.captured") {
-            await handleWebhookPaymentSuccess(paymentEntity);
+            const paymentType = paymentEntity?.notes?.type;
+            if (paymentType === 'wallet_recharge') {
+                await handleWebhookWalletRecharge(paymentEntity);
+            } else {
+                await handleWebhookPaymentSuccess(paymentEntity);
+            }
         } else if (event === "payment.failed") {
             await handleWebhookPaymentFailed(paymentEntity);
         } else {
@@ -261,6 +267,27 @@ exports.handleRazorpayWebhook = async (req, res) => {
         return res.status(500).json({ success: false });
     }
 };
+
+/**
+ * Webhook handler for wallet_recharge payment.captured events.
+ * Uses the same creditWalletAfterPayment helper as the verify API
+ * so crediting is always idempotent.
+ */
+async function handleWebhookWalletRecharge(paymentEntity) {
+    const razorpayOrderId = paymentEntity?.order_id;
+    const razorpayPaymentId = paymentEntity?.id;
+    if (!razorpayOrderId || !razorpayPaymentId) return;
+
+    const rechargeOrder = await WalletRechargeOrder.findOne({ razorpayOrderId });
+    if (!rechargeOrder) {
+        console.error('Wallet recharge webhook: WalletRechargeOrder not found for', razorpayOrderId);
+        return;
+    }
+
+    // Lazy import avoids circular dependency
+    const { creditWalletAfterPayment } = require('./walletController');
+    await creditWalletAfterPayment(rechargeOrder, razorpayPaymentId);
+}
 
 async function handleWebhookPaymentSuccess(paymentEntity) {
     const orderId = paymentEntity?.notes?.orderId;

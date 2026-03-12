@@ -1,6 +1,52 @@
+const crypto = require('crypto');
 const User = require('../models/User');
 const WalletTransaction = require('../models/WalletTransaction');
+const WalletRechargeOrder = require('../models/WalletRechargeOrder');
+const { getRazorpay } = require('../services/razorpayService');
 const { formatWalletTransaction } = require('../utils/responseFormatter');
+
+// Minimum / maximum recharge limits (INR)
+const MIN_RECHARGE = 1;
+const MAX_RECHARGE = 100000;
+
+/**
+ * Shared helper — credits the wallet after a verified Razorpay payment.
+ * Idempotent: if the rechargeOrder is already credited it returns silently.
+ *
+ * @param {Document} rechargeOrder  - WalletRechargeOrder document
+ * @param {string}   razorpayPaymentId
+ * @returns {Promise<void>}
+ */
+async function creditWalletAfterPayment(rechargeOrder, razorpayPaymentId) {
+    if (rechargeOrder.credited) return; // idempotency guard
+
+    const user = await User.findById(rechargeOrder.user);
+    if (!user) throw new Error('User not found for wallet credit');
+
+    user.walletBalance = (user.walletBalance || 0) + rechargeOrder.amount;
+    await user.save();
+
+    const txn = await WalletTransaction.create({
+        user: rechargeOrder.user,
+        amount: rechargeOrder.amount,
+        type: 'credit',
+        source: 'recharge',
+        status: 'completed',
+        description: 'Wallet recharge via Razorpay',
+        razorpayOrderId: rechargeOrder.razorpayOrderId,
+        razorpayPaymentId,
+    });
+
+    rechargeOrder.razorpayPaymentId = razorpayPaymentId;
+    rechargeOrder.status = 'paid';
+    rechargeOrder.credited = true;
+    rechargeOrder.walletTransactionId = txn._id;
+    await rechargeOrder.save();
+}
+
+// Exported for use by the Razorpay webhook handler in paymentController
+exports.creditWalletAfterPayment = creditWalletAfterPayment;
+
 exports.getWalletDetails = async (req, res) => {
     try {
         const user = await User.findById(req.user._id).select('walletBalance');
@@ -38,32 +84,106 @@ exports.getWalletDetailsByUserId = async (req, res) => {
         res.status(500).json({ message: error.message });
     }
 };
-exports.addMoneyToWallet = async (req, res) => {
+/**
+ * POST /api/wallet/create-recharge-order
+ * Step 1 of wallet top-up: create a Razorpay order and return its details
+ * to the frontend so it can open the Razorpay checkout pop-up.
+ */
+exports.createWalletRechargeOrder = async (req, res) => {
     try {
-        const { amount, transactionId } = req.body;
-        if (!amount || amount <= 0) {
-            return res.status(400).json({ message: "Invalid amount" });
+        const { amount } = req.body;
+        const numAmount = Number(amount);
+
+        if (!amount || isNaN(numAmount) || numAmount < MIN_RECHARGE || numAmount > MAX_RECHARGE) {
+            return res.status(400).json({
+                success: false,
+                message: `Amount must be between ₹${MIN_RECHARGE} and ₹${MAX_RECHARGE}`,
+            });
         }
+
         const user = await User.findById(req.user._id);
-        if (!user) {
-            return res.status(404).json({ message: "User not found" });
-        }
-        user.walletBalance += Number(amount);
-        await user.save();
-        const transaction = await WalletTransaction.create({
-            user: req.user._id,
-            amount: amount,
-            type: 'credit',
-            description: 'Added money to wallet',
-            transactionId: transactionId || 'TXN_' + Date.now()
+        if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+
+        const razorpayOrder = await getRazorpay().orders.create({
+            amount: Math.round(numAmount * 100), // paise
+            currency: 'INR',
+            receipt: `wr_${req.user._id.toString().slice(-8)}_${Date.now()}`,
+            notes: {
+                type: 'wallet_recharge',
+                userId: req.user._id.toString(),
+            },
         });
-        res.status(201).json({
-            message: "Money added successfully",
-            balance: user.walletBalance,
-            transaction: transaction
+
+        const rechargeOrder = await WalletRechargeOrder.create({
+            user: req.user._id,
+            amount: numAmount,
+            razorpayOrderId: razorpayOrder.id,
+        });
+
+        return res.status(201).json({
+            success: true,
+            orderId: rechargeOrder._id,
+            razorpayOrderId: razorpayOrder.id,
+            amount: razorpayOrder.amount,   // in paise
+            currency: razorpayOrder.currency,
+            keyId: process.env.RAZORPAY_KEY_ID,
         });
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        console.error('createWalletRechargeOrder error:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+/**
+ * POST /api/wallet/verify-payment
+ * Step 2 of wallet top-up: verify the Razorpay HMAC signature sent by the
+ * frontend, then credit the wallet exactly once.
+ */
+exports.verifyWalletRechargePayment = async (req, res) => {
+    try {
+        const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body;
+
+        if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+            return res.status(400).json({
+                success: false,
+                message: 'razorpay_order_id, razorpay_payment_id, and razorpay_signature are required',
+            });
+        }
+
+        // 1. Verify HMAC-SHA256 signature
+        const expectedSignature = crypto
+            .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
+            .update(`${razorpay_order_id}|${razorpay_payment_id}`)
+            .digest('hex');
+
+        if (expectedSignature !== razorpay_signature) {
+            return res.status(400).json({ success: false, message: 'Payment signature verification failed' });
+        }
+
+        // 2. Find the recharge order — must belong to the authenticated user
+        const rechargeOrder = await WalletRechargeOrder.findOne({
+            razorpayOrderId: razorpay_order_id,
+            user: req.user._id,
+        });
+
+        if (!rechargeOrder) {
+            return res.status(404).json({ success: false, message: 'Recharge order not found' });
+        }
+
+        // 3. Credit wallet (idempotent)
+        await creditWalletAfterPayment(rechargeOrder, razorpay_payment_id);
+
+        const user = await User.findById(req.user._id).select('walletBalance');
+
+        return res.status(200).json({
+            success: true,
+            message: 'Wallet recharged successfully',
+            amount: rechargeOrder.amount,
+            newBalance: user.walletBalance,
+        });
+    } catch (error) {
+        console.error('verifyWalletRechargePayment error:', error);
+        return res.status(500).json({ success: false, message: error.message });
     }
 };
 exports.getAllWallets = async (req, res) => {
@@ -103,6 +223,7 @@ exports.createWallet = async (req, res) => {
                 user: userId,
                 amount: initialBalance,
                 type: 'credit',
+                source: 'admin_credit',
                 description: 'Admin wallet initialization',
                 adminAction: true
             });
@@ -140,6 +261,7 @@ exports.updateWalletBalance = async (req, res) => {
             user: userId,
             amount: amount,
             type: type,
+            source: type === 'credit' ? 'admin_credit' : 'admin_debit',
             description: description || `Admin ${type} transaction`,
             adminAction: true,
             adminId: req.user._id
