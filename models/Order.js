@@ -26,6 +26,11 @@ const orderSchema = new mongoose.Schema(
         name: String,
         quantity: Number,
         price: Number,
+        lineTotal: { type: Number, default: 0 },
+        gstPercent: { type: Number, default: 0 },
+        itemGstAmount: { type: Number, default: 0 },
+        cgst: { type: Number, default: 0 },
+        sgst: { type: Number, default: 0 },
         commissionPercent: { type: Number, default: 0 },
         adminCommissionAmount: { type: Number, default: 0 },
         restaurantEarningAmount: { type: Number, default: 0 },
@@ -62,13 +67,33 @@ const orderSchema = new mongoose.Schema(
       gstPercentOnFood: { type: Number, default: 0 },
       gstPercentOnPackaging: { type: Number, default: 0 },
       gstPercentOnDiscount: { type: Number, default: 0 },
+      gstPercentOnPlatform: { type: Number, default: 0 },
+      // GST split fields — restaurant bill (invoice v2)
+      taxableAmountFood: { type: Number, default: 0 },
+      cgstOnFood: { type: Number, default: 0 },
+      sgstOnFood: { type: Number, default: 0 },
+      cgstOnPackaging: { type: Number, default: 0 },
+      sgstOnPackaging: { type: Number, default: 0 },
+      // Platform bill section (invoice v2)
+      taxablePlatformAmount: { type: Number, default: 0 },
+      gstOnPlatform: { type: Number, default: 0 },
+      cgstPlatform: { type: Number, default: 0 },
+      sgstPlatform: { type: Number, default: 0 },
+      platformBillTotal: { type: Number, default: 0 },
+      // Discount distribution (invoice v2)
+      platformDiscountUsed: { type: Number, default: 0 },
+      restaurantDiscountUsed: { type: Number, default: 0 },
       // Settlement clarity fields (v2)
       restaurantGross: { type: Number, default: 0 },        // itemTotal + packaging (for audit trail)
       restaurantNet: { type: Number, default: 0 },          // alias for restaurantNetEarning
       riderDeliveryEarning: { type: Number, default: 0 },   // delivery fee credited to rider
       riderIncentive: { type: Number, default: 0 },         // incentive bonus credited to rider
-      riderPlatformFeeShare: { type: Number, default: 0 },  // platform fee portion to rider
-      adminPlatformFeeShare: { type: Number, default: 0 },  // platform fee portion to admin
+      riderPlatformFeeShare: { type: Number, default: 0 },  // platform fee portion to rider (pre-GST)
+      adminPlatformFeeShare: { type: Number, default: 0 },  // = gstOnPlatform: 18% GST on delivery+platform fee → admin wallet
+      // Admin commission GST (invoice v2) — GST on restaurant commission, deducted from restaurant earnings
+      adminCommissionGst: { type: Number, default: 0 },            // adminCommission × 18%
+      adminCommissionGstPercent: { type: Number, default: 18 },    // GST rate applied
+      totalAdminCommissionDeduction: { type: Number, default: 0 }, // adminCommission + adminCommissionGst
       computedVersion: { type: String, default: "settlement-v1" },
       computedAt: { type: Date, default: Date.now },
     },

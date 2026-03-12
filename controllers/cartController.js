@@ -214,6 +214,7 @@ exports.addToCart = async (req, res) => {
       name: product.name.en,
       image: product.image,
       price: finalPrice,
+      gstPercent: typeof product.gstPercent === 'number' ? product.gstPercent : 5,
       quantity: parsedQuantity,
       addOns: addOnsArr,
     };

@@ -5,6 +5,7 @@ const cartItemSchema = new mongoose.Schema({
     name: String, // Cache name for display
     image: String, // Cache product image for display
     price: Number, // Unit price (basePrice + variation.price + Σ addOns.price)
+    gstPercent: { type: Number, default: 5 }, // Product GST slab (0/5/12/18)
     quantity: { type: Number, required: true, min: 1 },
     variation: {
         _id: String, // Variation ID

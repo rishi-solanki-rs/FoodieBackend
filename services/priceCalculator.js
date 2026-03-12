@@ -37,6 +37,8 @@ async function getAdminSettings() {
   return {
     defaultGstPercent: settings?.defaultGstPercent ?? 5,
     platformFee: settings?.platformFee ?? 9,
+    platformFeeGstPercent: settings?.platformFeeGstPercent ?? 18,
+    adminCommissionGstPercent: settings?.adminCommissionGstPercent ?? 18,
     smallCartThreshold: settings?.smallCartThreshold ?? 0,
     smallCartFee: settings?.smallCartFee ?? 0,
     deliverySlabs: {
@@ -180,12 +182,16 @@ async function calculateOrderPrice({
       packagingGstPercent,
       foodierDiscount: discount,
       discountGstPercent,
+      // Pass platform bill so settlement can apply platform-first discount distribution
+      deliveryFee: finalDeliveryFee,
+      platformFee,
+      platformGstPercent: adminSettings.platformFeeGstPercent, // 18% GST on platform fee + delivery (service tax)
     });
 
     const gstTotalForOrder = round(settlement.gstOnFood + settlement.packagingGST);
 
-    // 7. Grand total
-    let totalAmount = settlement.finalPayableToRestaurant + finalDeliveryFee + platformFee + smallCartFee + round(tip);
+    // 7. Grand total = restaurant bill (post-discount) + platform bill (post-discount) + tip
+    let totalAmount = settlement.finalPayableToRestaurant + settlement.platformBillTotal + smallCartFee + round(tip);
     totalAmount = round(Math.max(0, totalAmount));
 
     // 8. Wallet deduction

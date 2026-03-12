@@ -90,6 +90,7 @@ const normalizeTip = (value) => {
 const calculateBill = async (
   cart,
   userId = null,
+  deliveryDistanceKm = 0,
 ) => {
   try {
     const safeItems = Array.isArray(cart?.items)
@@ -115,13 +116,14 @@ const calculateBill = async (
       items: restaurantItems.map((item) => ({
         price: item.price,
         quantity: item.quantity,
-        variation: null,
-        addOns: []
+        gstPercent: item.gstPercent,  // per-product GST slab stored at add-to-cart time
+        variation: null,              // already baked into item.price — do NOT double-count
+        addOns: []                    // already baked into item.price — do NOT double-count
       })),
       restaurantId,
       userId,
       couponCode: cart.couponCode || null,
-      deliveryDistance: 0,
+      deliveryDistance: deliveryDistanceKm,
       tip
     });
     if (!pricingResult.success) {
@@ -213,7 +215,18 @@ exports.placeOrder = async (req, res) => {
     if (restaurant.isTemporarilyClosed) {
       return sendError(res, 400, `${restaurant.name} is temporarily closed`);
     }
-    const bill = await calculateBill(cart, req.user._id);
+    // Compute delivery distance so the bill uses the correct distance-based slab fee
+    const { calculateDistance } = require('../utils/locationUtils');
+    let deliveryDistanceKm = 0;
+    if (
+      restaurant.location?.coordinates?.length === 2 &&
+      deliveryAddress.location?.coordinates?.length === 2
+    ) {
+      deliveryDistanceKm = Math.round(
+        calculateDistance(restaurant.location.coordinates, deliveryAddress.location.coordinates) * 100
+      ) / 100;
+    }
+    const bill = await calculateBill(cart, req.user._id, deliveryDistanceKm);
     const totalPayment = bill.toPay;
     const tipAmount = bill.tip || 0;
     const totalBeforeTip = Math.max(0, totalPayment - tipAmount);
@@ -247,10 +260,13 @@ exports.placeOrder = async (req, res) => {
       : "Your order has been placed";
     const productIds = cart.items.map((item) => item?.product).filter(Boolean);
     const products = await Product.find({ _id: { $in: productIds } })
-      .select('_id adminCommissionPercent')
+      .select('_id adminCommissionPercent gstPercent')
       .lean();
     const productCommissionMap = new Map(
       products.map((p) => [p._id.toString(), Number.isFinite(Number(p.adminCommissionPercent)) ? Number(p.adminCommissionPercent) : null])
+    );
+    const productGstMap = new Map(
+      products.map((p) => [p._id.toString(), typeof p.gstPercent === 'number' ? p.gstPercent : null])
     );
 
     let adminCommission = 0;
@@ -269,11 +285,22 @@ exports.placeOrder = async (req, res) => {
       adminCommission += itemAdminCommission;
       restaurantEarningSum += itemRestaurantEarning;
 
+      // Per-item GST breakdown for invoice
+      const itemGstPercent = productGstMap.get(String(item.product)) ?? (item.gstPercent || 0);
+      const itemGstAmount = Math.round(lineTotal * (itemGstPercent / 100) * 100) / 100;
+      const itemCgst = Math.round(itemGstAmount / 2 * 100) / 100;
+      const itemSgst = Math.round((itemGstAmount - itemCgst) * 100) / 100;
+
       return {
         product: item.product,
         name: item.name,
         quantity: item.quantity,
         price: item.price,
+        lineTotal,
+        gstPercent: itemGstPercent,
+        itemGstAmount,
+        cgst: itemCgst,
+        sgst: itemSgst,
         commissionPercent,
         adminCommissionAmount: itemAdminCommission,
         restaurantEarningAmount: itemRestaurantEarning,
@@ -290,21 +317,31 @@ exports.placeOrder = async (req, res) => {
     // Packaging is tracked separately in paymentBreakdown and goes to the restaurant
     // in full; it is not subject to commission.
     // GST, deliveryFee, and platformFee are NOT part of restaurant earnings.
-    const restaurantGross = Math.round(((bill.itemTotal || 0) + (bill.packaging || 0)) * 100) / 100;
-    const restaurantNet = Math.max(0, restaurantEarningSum);
-
-    // ── Rider Earnings ───────────────────────────────────────────────────────
-    // Components: deliveryFee + platformFee share + incentive
-    // Tip is separate and credited to rider wallet at settlement
+    // Load admin settings now — needed for both commission GST and rider incentive percent.
     const adminSettings = await AdminSetting.findOne().lean();
     const payoutConfig = adminSettings?.payoutConfig || {};
     const incentivePercent = payoutConfig.riderIncentivePercent ?? 5;
 
+    // 18% GST on admin commission is billed to the restaurant (not the customer).
+    // Restaurant net earning is reduced by this; admin wallet receives commission + its GST.
+    const adminCommissionGstPercent = adminSettings?.adminCommissionGstPercent ?? 18;
+    const adminCommissionGst = Math.round(adminCommission * (adminCommissionGstPercent / 100) * 100) / 100;
+    const totalAdminCommissionDeduction = Math.round((adminCommission + adminCommissionGst) * 100) / 100;
+
+    const restaurantGross = Math.round(((bill.itemTotal || 0) + (bill.packaging || 0)) * 100) / 100;
+    // Restaurant keeps item earnings minus full admin deduction (base commission + GST on commission)
+    const restaurantNet = Math.max(0, restaurantEarningSum - adminCommissionGst);
+
+    // ── Rider Earnings ───────────────────────────────────────────────────────
+    // Rider receives: deliveryFee (pre-GST) + platformFee (pre-GST) + incentive.
+    // The 18% GST on (deliveryFee + platformFee) goes to admin wallet as gstOnPlatform.
+
     // Rider delivery charge = full delivery fee collected from customer (System A — snapshot)
     const riderDeliveryCharge = Math.round((bill.deliveryFee || 0) * 100) / 100;
-    // Platform fee split: rider receives the full platform fee by default (admin share = 0)
+    // Rider receives the pre-GST platform fee; the 18% GST portion goes to admin wallet.
     const riderPlatformFeeShare = Math.round((bill.platformFee || 0) * 100) / 100;
-    const adminPlatformFeeShare = Math.round(((bill.platformFee || 0) - riderPlatformFeeShare) * 100) / 100;
+    // Admin's platform GST earning = 18% on (deliveryFee + platformFee) combined
+    const adminPlatformFeeShare = Math.round((bill.paymentBreakdown?.gstOnPlatform || 0) * 100) / 100;
     // Incentive: % of item subtotal (before GST/fees)
     const riderIncentiveAmount = Math.max(0, Math.round((bill.itemTotal * (incentivePercent / 100)) * 100) / 100);
 
@@ -336,6 +373,7 @@ exports.placeOrder = async (req, res) => {
       deliveryOtp,
       deliveryOtpExpiresAt: new Date(Date.now() + otpExpiry),
       items: orderItems,
+      deliveryDistanceKm,
       itemTotal: bill.itemTotal,
       tax: bill.tax,
       packaging: bill.packaging,
@@ -363,10 +401,13 @@ exports.placeOrder = async (req, res) => {
         // Audit trail fields
         restaurantGross,
         restaurantNet,
+        adminCommissionGst,
+        adminCommissionGstPercent,
+        totalAdminCommissionDeduction,
         riderDeliveryEarning: riderEarningsData.deliveryCharge,
         riderIncentive: riderIncentiveAmount,
         riderPlatformFeeShare,
-        adminPlatformFeeShare,
+        adminPlatformFeeShare,  // = gstOnPlatform (18% GST on delivery+platform fee)
         computedVersion: "settlement-v2",
         computedAt: new Date(),
       },
@@ -556,7 +597,11 @@ exports.getOrderDetailsCustomer = async (req, res) => {
           image: item.product?.image,
           quantity: item.quantity,
           price: item.price,
-          total: (item.price || 0) * item.quantity,
+          lineTotal: item.lineTotal || Math.round((item.price || 0) * item.quantity * 100) / 100,
+          gstPercent: item.gstPercent || 0,
+          itemGstAmount: item.itemGstAmount || 0,
+          cgst: item.cgst || 0,
+          sgst: item.sgst || 0,
           ...(item.variation && { variation: item.variation }),
           ...(item.addOns?.length && { addOns: item.addOns })
         })),
@@ -569,6 +614,7 @@ exports.getOrderDetailsCustomer = async (req, res) => {
           tip: orderObj.tip,
           discount: orderObj.discount,
           totalAmount: orderObj.totalAmount,
+          paymentBreakdown: orderObj.paymentBreakdown || null,
         },
         payment: {
           method: orderObj.paymentMethod,
