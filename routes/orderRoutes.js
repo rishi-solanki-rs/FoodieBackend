@@ -100,7 +100,6 @@ router.put('/:id/reject', protect, restaurantOwner, ownerRejectOrder);
 router.put('/:id/owner-cancel', protect, restaurantOwner, ownerCancelOrder);
 router.put('/:id/delay', protect, restaurantOwner, ownerDelayOrder);
 router.get("/:id/rider", protect, rider, generalOrderLimiter, getOrderDetailsRider); // ✅ Explicit rider route
-router.put("/:id/status", protect, rider, updateOrderStatus); // Protected, typically for Rider/Rest/Admin
 router.get("/:id/track", protect, trackOrder);
 router.post("/:id/reorder", protect, reorder);
 router.post("/:id/report", protect, reportIssue);

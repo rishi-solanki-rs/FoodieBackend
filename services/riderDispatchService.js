@@ -35,6 +35,15 @@ exports.findAndNotifyRider = async (orderId) => {
                 orderId,
                 message: 'No riders available at this moment'
             });
+            // Also push-notify the restaurant owner so they know even if not connected to socket
+            if (restaurant.owner) {
+                sendNotification(
+                    restaurant.owner,
+                    'No Riders Available',
+                    `No delivery riders could be found for Order #${orderId.toString().slice(-6)}. Please try again shortly.`,
+                    { orderId: orderId.toString(), type: 'no_rider_found' }
+                ).catch(() => {});
+            }
             return;
         }
 
@@ -326,7 +335,8 @@ exports.handleRiderResponse = async (riderUserId, requestId, action) => {
             const otherPendingRiders = await RideRequest.find({
                 order: targetOrder._id,
                 _id: { $ne: rideRequest._id },
-                status: 'rejected'
+                status: 'rejected',
+                updatedAt: { $gte: new Date(Date.now() - 10000) } // only riders rejected in last 10s (current batch)
             }).select('rider');
             for (const req of otherPendingRiders) {
                 const otherRider = await Rider.findById(req.rider).select('user');
@@ -337,6 +347,16 @@ exports.handleRiderResponse = async (riderUserId, requestId, action) => {
                     });
                 }
             }
+            // Confirm acceptance back to the accepting rider via socket
+            socketService.emitToRider(riderUserId.toString(), 'order:accepted', {
+                orderId: targetOrder._id,
+                status: 'assigned',
+                restaurantName: populatedOrder.restaurant?.name || '',
+                customerName: populatedOrder.customer?.name || '',
+                totalAmount: targetOrder.totalAmount,
+                message: 'Order accepted — proceed to restaurant',
+                timestamp: new Date()
+            });
             return { success: true, message: 'Order accepted successfully' };
         } else {
             rideRequest.status = 'rejected';

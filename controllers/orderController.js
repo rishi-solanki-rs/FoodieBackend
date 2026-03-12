@@ -1495,6 +1495,11 @@ exports.updateOrderStatus = async (req, res) => {
             timestamp: new Date(),
           };
           socketService.emitToRider(order.rider.toString(), 'rider:earnings_updated', settlementPayload);
+          // Also emit to rider:<userId> room for robustness
+          const riderDocForEmit = await Rider.findById(order.rider).select('user').lean();
+          if (riderDocForEmit?.user) {
+            socketService.emitToRider(riderDocForEmit.user.toString(), 'rider:earnings_updated', settlementPayload);
+          }
           socketService.emitToRestaurant(order.restaurant.toString(), 'restaurant:earnings_updated', settlementPayload);
           socketService.emitToAdmin('earnings:updated', settlementPayload);
         }
@@ -1699,8 +1704,7 @@ exports.markOrderReady = async (req, res) => {
     const order = await Order.findById(req.params.id)
       .populate("customer", "name")
       .populate("restaurant", "name")
-      .populate("rider", "user")
-      .populate("rider.user", "name mobile");
+      .populate({ path: "rider", select: "user", populate: { path: "user", select: "_id name mobile" } });
     if (!order) return res.status(404).json({ message: "Order not found" });
     const validation = validateRestaurantMarkReady(order);
     if (!validation.valid) {
@@ -1733,19 +1737,24 @@ exports.markOrderReady = async (req, res) => {
       restaurantCoords = restaurantDoc?.location?.coordinates;
     } catch (e) { }
     if (order.rider) {
-      // Emit to rider:<riderId> room (rider joins this room on connect)
-      socketService.emitToRider(order.rider._id.toString(), 'order:ready', {
+      const readyPayload = {
         orderId: order._id.toString(),
         message: 'Order is Ready for Pickup!',
         restaurantName,
         status: 'ready',
         timestamp: new Date()
-      });
+      };
+      // Emit to rider:<riderId> room AND rider:<userId> room for robustness.
+      // The rider joins both at socket connect time; either room will deliver the event.
+      socketService.emitToRider(order.rider._id.toString(), 'order:ready', readyPayload);
+      if (order.rider.user?._id) {
+        socketService.emitToRider(order.rider.user._id.toString(), 'order:ready', readyPayload);
+      }
       try {
-        const riderDoc = await Rider.findById(order.rider._id);
-        if (riderDoc) {
+        const riderUserId = order.rider.user?._id || order.rider.user;
+        if (riderUserId) {
           await sendNotification(
-            riderDoc.user,
+            riderUserId,
             "Order Ready For Pickup!",
             `${restaurantName} - Your food is ready - ₹${order.totalAmount}`
           );
@@ -2429,6 +2438,11 @@ exports.adminUpdateStatus = async (req, res) => {
             timestamp: new Date(),
           };
           socketService.emitToRider(order.rider.toString(), 'rider:earnings_updated', settlementPayload);
+          // Also emit to rider:<userId> room for robustness
+          const riderDocForEmitAdmin = await Rider.findById(order.rider).select('user').lean();
+          if (riderDocForEmitAdmin?.user) {
+            socketService.emitToRider(riderDocForEmitAdmin.user.toString(), 'rider:earnings_updated', settlementPayload);
+          }
           socketService.emitToRestaurant(order.restaurant.toString(), 'restaurant:earnings_updated', settlementPayload);
           socketService.emitToAdmin('earnings:updated', settlementPayload);
         }

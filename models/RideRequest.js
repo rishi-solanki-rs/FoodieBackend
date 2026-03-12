@@ -20,6 +20,6 @@ const rideRequestSchema = new mongoose.Schema({
         default: Date.now,
         index: { expires: '15m' } // Auto-delete old requests after 15 mins to save space
     }
-});
+}, { timestamps: true });
 rideRequestSchema.index({ order: 1, rider: 1 }, { unique: true });
 module.exports = mongoose.model('RideRequest', rideRequestSchema);

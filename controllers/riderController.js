@@ -2692,6 +2692,8 @@ exports.verifyDelivery = async (req, res) => {
       };
 
       socketService.emitToRider(riderProfile._id.toString(), 'rider:earnings_updated', settlementPayload);
+      // Also emit to rider:<userId> room as a fallback in case riderId room wasn't joined
+      socketService.emitToRider(req.user._id.toString(), 'rider:earnings_updated', settlementPayload);
       socketService.emitToRestaurant(order.restaurant.toString(), 'restaurant:earnings_updated', settlementPayload);
       socketService.emitToAdmin('earnings:updated', settlementPayload);
 
