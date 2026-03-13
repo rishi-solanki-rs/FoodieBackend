@@ -134,7 +134,7 @@ exports.verifyRazorpayPayment = async (req, res) => {
         // Logging
         try {
             logOrderTransition(order._id, "pending", "placed", order.customer._id, "system", "Payment verified by Razorpay signature");
-            logPayment(null, order.customer._id, "online", order.totalAmount, "success");
+            logPayment(order._id, order.customer._id, "online", order.totalAmount, "success");
         } catch (e) {
             logger.error("Error logging payment transition", e);
         }
@@ -315,7 +315,7 @@ async function handleWebhookPaymentSuccess(paymentEntity) {
 
     try {
         logOrderTransition(order._id, "pending", "placed", order.customer._id, "system", "Payment confirmed by Razorpay webhook");
-        logPayment(null, order.customer._id, "online", order.totalAmount, "success");
+        logPayment(order._id, order.customer._id, "online", order.totalAmount, "success");
     } catch (e) { }
 
     try {
@@ -401,6 +401,6 @@ async function handleWebhookPaymentFailed(paymentEntity) {
 
     try {
         logOrderTransition(order._id, null, "failed", order.customer, "system", "Razorpay payment failed");
-        logPayment(null, order.customer, "online", order.totalAmount, "failed");
+        logPayment(order._id, order.customer, "online", order.totalAmount, "failed");
     } catch (e) { }
 }
