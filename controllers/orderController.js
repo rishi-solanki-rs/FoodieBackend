@@ -383,13 +383,15 @@ exports.placeOrder = async (req, res) => {
     const adminPlatformFeeShare = Math.round((canonicalSettlement.gstOnPlatform || 0) * 100) / 100;
     // Incentive: % of item subtotal (before GST/fees)
     const riderIncentiveAmount = Math.max(0, Math.round((bill.itemTotal * (incentivePercent / 100)) * 100) / 100);
+    const riderTipAmount = Math.max(0, Math.round((tipAmount || 0) * 100) / 100);
 
     const riderEarningsData = {
       deliveryCharge: riderDeliveryCharge,
       platformFee: riderPlatformFeeShare,
       incentive: riderIncentiveAmount,
+      tip: riderTipAmount,
       incentivePercentAtCompletion: incentivePercent,
-      totalRiderEarning: Math.max(0, Math.round((riderDeliveryCharge + riderPlatformFeeShare + riderIncentiveAmount) * 100) / 100),
+      totalRiderEarning: Math.max(0, Math.round((riderDeliveryCharge + riderPlatformFeeShare + riderIncentiveAmount + riderTipAmount) * 100) / 100),
       earnedAt: new Date(),
     };
     const pickupOtp = Math.floor(1000 + Math.random() * 9000).toString();
@@ -434,6 +436,7 @@ exports.placeOrder = async (req, res) => {
         totalAdminCommissionDeduction: Math.round((adminCommission + adminCommissionGstTotal) * 100) / 100,
         riderDeliveryEarning: riderEarningsData.deliveryCharge,
         riderIncentive: riderIncentiveAmount,
+        riderTip: riderTipAmount,
         riderPlatformFeeShare,
         adminPlatformFeeShare,
         computedVersion: "settlement-v2",
@@ -840,7 +843,7 @@ exports.getOrderDetailsRider = async (req, res) => {
           deliveryFee: orderObj.deliveryFee,
           tip: orderObj.tip,
           totalAmount: orderObj.totalAmount,
-          riderEarning: (orderObj.riderEarnings?.totalRiderEarning || 0) + (orderObj.tip || 0),
+          riderEarning: (orderObj.riderEarnings?.totalRiderEarning || 0),
         },
         payment: {
           method: orderObj.paymentMethod,
@@ -3084,8 +3087,9 @@ const buildBillingSectionsFromOrder = (orderLike) => {
   const riderDeliveryCharge = asAmount(rider.deliveryCharge ?? 0);
   const riderPlatformCredit = asAmount(rider.platformFee ?? 0);
   const riderIncentive = asAmount(rider.incentive ?? 0);
+  const riderTip = asAmount(rider.tip ?? order.tip ?? 0);
   const riderIncentivePercent = asAmount(rider.incentivePercentAtCompletion ?? 0);
-  const riderTotalEarning = asAmount(rider.totalRiderEarning ?? (riderDeliveryCharge + riderPlatformCredit + riderIncentive));
+  const riderTotalEarning = asAmount(rider.totalRiderEarning ?? (riderDeliveryCharge + riderPlatformCredit + riderIncentive + riderTip));
 
   const totalCollectionFromCustomer = asAmount(pb.platformBillTotal ?? (deliveryFee + platformFee + asAmount(pb.gstOnPlatform ?? 0)));
   const sharedWithRider = asAmount(riderDeliveryCharge + riderPlatformCredit);
@@ -3162,7 +3166,9 @@ const buildBillingSectionsFromOrder = (orderLike) => {
         deliveryCharge: riderDeliveryCharge,
         platformCredit: riderPlatformCredit,
         incentive: riderIncentive,
+        tip: riderTip,
       },
+      tip: riderTip,
       totalEarning: riderTotalEarning,
       walletCreditNote: 'Credited to rider wallet after delivery',
     },
@@ -3178,6 +3184,7 @@ const buildBillingSectionsFromOrder = (orderLike) => {
       },
       platformFee,
       deliveryCharges: deliveryFee,
+      customerTipPassedToRider: riderTip,
       totalCollectionFromCustomer,
       sharedWithRider,
       retainedByPlatform,

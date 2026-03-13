@@ -182,9 +182,9 @@ exports.getEarningsOrders = async (req, res) => {
         // Shape each order into a clean earnings card
         const earningsCards = orders.map((o) => {
             const base = r2((o.riderEarnings?.deliveryCharge || 0) + (o.riderEarnings?.platformFee || 0));
-            const tip = r2(o.tip || 0);
+            const tip = r2((o.riderEarnings?.tip ?? o.tip) || 0);
             const incentive = r2(o.riderEarnings?.incentive || 0);
-            const total = r2(o.riderEarnings?.totalRiderEarning || base + incentive);
+            const total = r2(o.riderEarnings?.totalRiderEarning || base + incentive + tip);
             return {
                 orderId: o._id,
                 deliveredAt: o.deliveredAt,
@@ -246,8 +246,8 @@ exports.getSingleOrderEarnings = async (req, res) => {
         if (!order) return sendError(res, 404, 'Order not found or not assigned to you');
 
         const base = r2((order.riderEarnings?.deliveryCharge || 0) + (order.riderEarnings?.platformFee || 0));
-        const tip = r2(order.tip || 0);
-        const total = r2(order.riderEarnings?.totalRiderEarning || base);
+        const tip = r2((order.riderEarnings?.tip ?? order.tip) || 0);
+        const total = r2(order.riderEarnings?.totalRiderEarning || base + tip + r2(order.riderEarnings?.incentive || 0));
 
         return res.status(200).json({
             success: true,
@@ -288,6 +288,7 @@ exports.getSingleOrderEarnings = async (req, res) => {
                         deliveryCharge: r2(order.riderEarnings?.deliveryCharge || 0),
                         platformFee: r2(order.riderEarnings?.platformFee || 0),
                         riderIncentive: r2(order.riderEarnings?.incentive || 0),
+                        tip: r2((order.riderEarnings?.tip ?? order.tip) || 0),
                         riderTotalEarning: r2(order.riderEarnings?.totalRiderEarning || 0),
                         tipField: r2(order.tip || 0),
                     },

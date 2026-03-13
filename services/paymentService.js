@@ -373,9 +373,9 @@ function getSettlementSnapshot(order, restaurant, distanceInfo) {
   const adminPlatformFeeShare = 0;
 
   // ── Rider earning formula ─────────────────────────────────────────────────
-  // totalRiderEarning = deliveryFee + platformFeeShare + incentive
-  // Tip is handled separately during wallet update (not included here)
-  const riderEarning = Math.max(0, Math.round((settlementDeliveryFee + riderPlatformFeeShare + riderIncentive) * 100) / 100);
+  // totalRiderEarning = deliveryFee + platformFeeShare + incentive + tip
+  const riderTip = Math.max(0, Number((order?.riderEarnings?.tip ?? order?.tip) || 0));
+  const riderEarning = Math.max(0, Math.round((settlementDeliveryFee + riderPlatformFeeShare + riderIncentive + riderTip) * 100) / 100);
 
   return {
     orderAmount: Number(order?.totalAmount || 0),
@@ -386,6 +386,7 @@ function getSettlementSnapshot(order, restaurant, distanceInfo) {
     commissionAmount: Math.max(0, commissionAmount),
     settlementDeliveryFee: Math.max(0, settlementDeliveryFee),
     riderIncentive: Math.max(0, riderIncentive),
+    riderTip: Math.max(0, riderTip),
     riderPlatformFeeShare: Math.max(0, riderPlatformFeeShare),
     adminPlatformFeeShare: Math.max(0, adminPlatformFeeShare),
     riderEarning,
@@ -507,9 +508,8 @@ async function processCODDelivery(orderId) {
         discount,
       } = settlement;
 
-      // Tip is a separate credit to the rider (not part of riderEarning base)
-      const tipAmount = Math.max(0, Number(fullOrder.tip || 0));
-      const riderTotalCredit = Math.round((riderEarning + tipAmount) * 100) / 100;
+      const tipAmount = Math.max(0, Number((fullOrder.riderEarnings?.tip ?? fullOrder.tip) || 0));
+      const riderTotalCredit = Math.round(riderEarning * 100) / 100;
 
       riderWallet.cashInHand += orderAmount;
       const wasFrozen = riderWallet.checkAndFreeze();
@@ -569,6 +569,7 @@ async function processCODDelivery(orderId) {
         deliveryCharge: settlementDeliveryFee,
         platformFee: riderPlatformFeeShare,
         incentive: riderIncentive,
+        tip: tipAmount,
         totalRiderEarning: riderEarning,
         incentivePercentAtCompletion: fullOrder.riderEarnings?.incentivePercentAtCompletion || 0,
         earnedAt: new Date(),
@@ -761,9 +762,8 @@ async function processOnlineDelivery(orderId) {
         discount,
       } = settlement;
 
-      // Tip is a separate credit to the rider (not part of riderEarning base)
-      const tipAmount = Math.max(0, Number(fullOrder.tip || 0));
-      const riderTotalCredit = Math.round((riderEarning + tipAmount) * 100) / 100;
+      const tipAmount = Math.max(0, Number((fullOrder.riderEarnings?.tip ?? fullOrder.tip) || 0));
+      const riderTotalCredit = Math.round(riderEarning * 100) / 100;
 
       riderWallet.totalEarnings += riderTotalCredit;
       riderWallet.availableBalance += riderTotalCredit;
@@ -819,6 +819,7 @@ async function processOnlineDelivery(orderId) {
         deliveryCharge: settlementDeliveryFee,
         platformFee: riderPlatformFeeShare,
         incentive: riderIncentive,
+        tip: tipAmount,
         totalRiderEarning: riderEarning,
         incentivePercentAtCompletion: fullOrder.riderEarnings?.incentivePercentAtCompletion || 0,
         earnedAt: new Date(),

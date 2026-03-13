@@ -97,6 +97,7 @@ async function processSettlement(orderId, options = {}) {
     const riderDeliveryCharge = r2(order.riderEarnings?.deliveryCharge || 0);
     const riderPlatformFee = r2(order.riderEarnings?.platformFee || 0);
     const riderIncentive = r2(order.riderEarnings?.incentive || 0);
+    const riderTip = r2((order.riderEarnings?.tip ?? order.tip) || 0);
     const riderTotalEarning = r2(order.riderEarnings?.totalRiderEarning || 0);
 
     const integrity = validateOrderFinancialIntegrity(order);
@@ -166,6 +167,7 @@ async function processSettlement(orderId, options = {}) {
       deliveryCharge: riderDeliveryCharge,
       platformFee: riderPlatformFee,
       incentive: riderIncentive,
+      tip: riderTip,
       totalRiderEarning: riderTotalEarning,
       incentivePercentAtCompletion: r2(order.riderEarnings?.incentivePercentAtCompletion || 0),
       earnedAt: new Date(),

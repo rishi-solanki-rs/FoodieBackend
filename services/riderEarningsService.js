@@ -103,11 +103,11 @@ const calculateIncentive = (itemTotal, incentivePercent) => {
  * CALCULATE TOTAL RIDER EARNINGS FOR AN ORDER
  * 
  * Comprehensive calculation of all three components:
- * totalRiderEarning = deliveryCharge + platformFee + incentive
+ * totalRiderEarning = deliveryCharge + platformFee + incentive + tip
  * 
  * @param {object} order - Order object with deliveryDistanceKm, deliveryFee, platformFee, itemTotal
  * @param {object} settings - Admin settings
- * @returns {object} - Complete breakdown: { deliveryCharge, platformFee, incentive, totalRiderEarning }
+ * @returns {object} - Complete breakdown: { deliveryCharge, platformFee, incentive, tip, totalRiderEarning }
  */
 const calculateRiderEarnings = (order, settings) => {
   if (!order) throw new Error('Order is required');
@@ -117,12 +117,13 @@ const calculateRiderEarnings = (order, settings) => {
   
   const payoutConfig = settings?.payoutConfig || {};
   const incentivePercent = payoutConfig.riderIncentivePercent || 5;
+  const tip = Math.max(0, Number(order.tip || 0));
   
   // Item total should be before GST/tax
   const itemTotal = order.itemTotal || 0;
   const incentive = calculateIncentive(itemTotal, incentivePercent);
   
-  const totalRiderEarning = deliveryInfo.totalDeliveryCharge + platformFeeShare + incentive;
+  const totalRiderEarning = deliveryInfo.totalDeliveryCharge + platformFeeShare + incentive + tip;
   
   return {
     deliveryCharge: deliveryInfo.totalDeliveryCharge,
@@ -133,6 +134,7 @@ const calculateRiderEarnings = (order, settings) => {
     },
     platformFee: platformFeeShare,
     incentive: incentive,
+    tip,
     incentivePercent: incentivePercent,
     totalRiderEarning: totalRiderEarning,
     earnedAt: new Date()
@@ -186,6 +188,7 @@ const creditRiderEarnings = async (orderId) => {
         deliveryCharge: order.riderEarnings.deliveryCharge,
         platformFee: order.riderEarnings.platformFee,
         incentive: order.riderEarnings.incentive,
+        tip: order.riderEarnings.tip ?? order.tip ?? 0,
         incentivePercent: order.riderEarnings.incentivePercentAtCompletion,
         totalRiderEarning: order.riderEarnings.totalRiderEarning,
         earnedAt: new Date(),
@@ -219,12 +222,13 @@ const creditRiderEarnings = async (orderId) => {
         deliveryCharge: earningsBreakdown.deliveryCharge,
         platformFee: earningsBreakdown.platformFee,
         incentive: earningsBreakdown.incentive,
+        tip: earningsBreakdown.tip,
         totalRiderEarning: earningsBreakdown.totalRiderEarning,
         riderIncentivePercent: earningsBreakdown.incentivePercent,
       },
       deliveryDistanceKm: order.deliveryDistanceKm,
       status: 'completed',
-      note: `Earnings credited for delivery. Delivery: ₹${earningsBreakdown.deliveryCharge}, Platform Fee: ₹${earningsBreakdown.platformFee}, Incentive: ₹${earningsBreakdown.incentive}`
+      note: `Earnings credited for delivery. Delivery: ₹${earningsBreakdown.deliveryCharge}, Platform Fee: ₹${earningsBreakdown.platformFee}, Incentive: ₹${earningsBreakdown.incentive}, Tip: ₹${earningsBreakdown.tip}`
     });
     
     // Save order

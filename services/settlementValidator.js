@@ -57,10 +57,11 @@ async function validateSettlement(orderId) {
   const deliveryCharge = Number(order.riderEarnings?.deliveryCharge || 0);
   const platformFee = Number(order.riderEarnings?.platformFee || 0);
   const riderIncentive = Number(order.riderEarnings?.incentive || 0);
+  const riderTip = Number((order.riderEarnings?.tip ?? order.tip) || 0);
 
   // ── Expected values ────────────────────────────────────────────────────────
-  const expectedRestaurantNet = Math.max(0, Math.round((itemTotal - adminCommission - gstOnFood - adminCommissionGst) * 100) / 100);
-  const expectedRiderEarning = Math.max(0, Math.round((deliveryCharge + platformFee + riderIncentive) * 100) / 100);
+  const expectedRestaurantNet = Math.max(0, Math.round((itemTotal - adminCommission - adminCommissionGst) * 100) / 100);
+  const expectedRiderEarning = Math.max(0, Math.round((deliveryCharge + platformFee + riderIncentive + riderTip) * 100) / 100);
 
   // ── Stored values ──────────────────────────────────────────────────────────
   const storedRestaurantNet = Number(order.restaurantEarning || 0);
@@ -82,7 +83,7 @@ async function validateSettlement(orderId) {
     issues.push(
       `riderEarning (base) mismatch: stored=${storedRiderBaseEarning.toFixed(2)}, ` +
       `expected=${expectedRiderEarning.toFixed(2)} ` +
-      `(deliveryCharge=${deliveryCharge}, platformFee=${platformFee}, incentive=${riderIncentive})`
+      `(deliveryCharge=${deliveryCharge}, platformFee=${platformFee}, incentive=${riderIncentive}, tip=${riderTip})`
     );
   }
 

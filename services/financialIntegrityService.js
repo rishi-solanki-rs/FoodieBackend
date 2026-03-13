@@ -57,9 +57,9 @@ function validateOrderFinancialIntegrity(orderLike) {
 
   // 6) Rider earnings integrity (canonical fields only)
   const re = order.riderEarnings || {};
-  const riderExpected = r2((re.deliveryCharge || 0) + (re.platformFee || 0) + (re.incentive || 0));
+  const riderExpected = r2((re.deliveryCharge || 0) + (re.platformFee || 0) + (re.incentive || 0) + ((re.tip ?? order.tip) || 0));
   if (!nearlyEqual(re.totalRiderEarning || 0, riderExpected)) {
-    issues.push('rider earnings mismatch: deliveryCharge + platformFee + incentive != totalRiderEarning');
+    issues.push('rider earnings mismatch: deliveryCharge + platformFee + incentive + tip != totalRiderEarning');
   }
 
   // 7) Item-level restaurant earning aggregation
@@ -104,6 +104,7 @@ function validateOrderFinancialIntegrity(orderLike) {
           deliveryCharge: Number(re.deliveryCharge || 0),
           platformFee: Number(re.platformFee || 0),
           incentive: Number(re.incentive || 0),
+          tip: Number((re.tip ?? order.tip) || 0),
           totalRiderEarning: Number(re.totalRiderEarning || 0),
         },
       },

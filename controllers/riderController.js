@@ -3543,7 +3543,7 @@ exports.getMyActiveOrder = async (req, res) => {
         earnings: {
           riderEarning: order.riderEarnings?.totalRiderEarning || 0,
           tip: order.tip || 0,
-          total: (order.riderEarnings?.totalRiderEarning || 0) + (order.tip || 0)
+          total: (order.riderEarnings?.totalRiderEarning || 0)
         },
         customerBill,
         timeline: order.timeline,

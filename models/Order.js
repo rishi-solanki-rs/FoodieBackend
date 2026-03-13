@@ -198,9 +198,12 @@ const orderSchema = new mongoose.Schema(
       // Calculation: (itemTotal before GST) × riderIncentivePercent
       // Example: ₹1000 × 5% = ₹50
       incentive: { type: Number, default: 0 },
+
+      // COMPONENT 4: Tip - Customer tip passed 100% to rider
+      tip: { type: Number, default: 0 },
       
-      // TOTAL: Sum of all three components
-      // totalRiderEarning = deliveryCharge + platformFee + incentive
+      // TOTAL: Sum of all rider-side components
+      // totalRiderEarning = deliveryCharge + platformFee + incentive + tip
       // This amount is credited to rider wallet immediately after delivery
       totalRiderEarning: { type: Number, default: 0 },
       
