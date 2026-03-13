@@ -89,7 +89,13 @@ const getRatingCount = (rating) => {
 const normalizeTip = (value) => {
   const numeric = Number(value);
   if (!Number.isFinite(numeric) || numeric < 0) return 0;
-  return Math.round(numeric * 100) / 100;
+  return Number(numeric.toFixed(5));
+};
+
+const toMoney = (value) => {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return 0;
+  return Number(numeric.toFixed(5));
 };
 const calculateBill = async (
   cart,
@@ -298,21 +304,21 @@ exports.placeOrder = async (req, res) => {
     const calculatedItems = Array.isArray(bill.itemDetails) ? bill.itemDetails : [];
     const orderItems = cart.items.map((item, index) => {
       const calculatedItem = calculatedItems[index] || {};
-      const fullUnitPrice = Math.round((Number(calculatedItem.unitPrice ?? item.price) || 0) * 100) / 100;
-      const lineTotal = Math.round((Number(calculatedItem.lineTotal) || (fullUnitPrice * (Number(item.quantity) || 0))) * 100) / 100;
+      const fullUnitPrice = toMoney(Number(calculatedItem.unitPrice ?? item.price) || 0);
+      const lineTotal = toMoney(Number(calculatedItem.lineTotal) || (fullUnitPrice * (Number(item.quantity) || 0)));
       const commissionPercent = Number.isFinite(Number(calculatedItem.commissionPercent))
         ? Number(calculatedItem.commissionPercent)
         : defaultCommissionPercent;
-      const itemAdminCommission = Math.round(lineTotal * (commissionPercent / 100) * 100) / 100;
-      const itemAdminCommissionGst = Math.round(itemAdminCommission * (adminCommissionGstPercent / 100) * 100) / 100;
+      const itemAdminCommission = toMoney(lineTotal * (commissionPercent / 100));
+      const itemAdminCommissionGst = toMoney(itemAdminCommission * (adminCommissionGstPercent / 100));
 
       const itemGstPercent = Number(calculatedItem.gstPercent ?? item.gstPercent ?? 0);
-      const itemGstAmount = Math.round((Number(calculatedItem.itemGstAmount) || (lineTotal * (itemGstPercent / 100))) * 100) / 100;
-      const itemCgst = Math.round((Number(calculatedItem.cgst) || (itemGstAmount / 2)) * 100) / 100;
-      const itemSgst = Math.round((Number(calculatedItem.sgst) || (itemGstAmount - itemCgst)) * 100) / 100;
+      const itemGstAmount = toMoney(Number(calculatedItem.itemGstAmount) || (lineTotal * (itemGstPercent / 100)));
+      const itemCgst = toMoney(Number(calculatedItem.cgst) || (itemGstAmount / 2));
+      const itemSgst = toMoney(Number(calculatedItem.sgst) || (itemGstAmount - itemCgst));
       const itemRestaurantEarning = Math.max(
         0,
-        Math.round((lineTotal - itemAdminCommission - itemAdminCommissionGst) * 100) / 100,
+        toMoney(lineTotal - itemAdminCommission - itemAdminCommissionGst),
       );
 
       adminCommission += itemAdminCommission;
@@ -344,9 +350,9 @@ exports.placeOrder = async (req, res) => {
         restaurant: restaurantId
       };
     });
-    adminCommission = Math.round(adminCommission * 100) / 100;
-    adminCommissionGstTotal = Math.round(adminCommissionGstTotal * 100) / 100;
-    restaurantEarningSum = Math.round(restaurantEarningSum * 100) / 100;
+    adminCommission = toMoney(adminCommission);
+    adminCommissionGstTotal = toMoney(adminCommissionGstTotal);
+    restaurantEarningSum = toMoney(restaurantEarningSum);
 
     const canonicalSettlement = calculateSettlementBreakdown({
       itemTotal: bill.itemTotal || 0,
@@ -358,6 +364,7 @@ exports.placeOrder = async (req, res) => {
       discountGstPercent: adminSettings?.defaultGstPercent ?? 5,
       deliveryFee: bill.deliveryFee || 0,
       platformFee: bill.platformFee || 0,
+      deliveryChargeGstPercent: adminSettings?.deliveryChargeGstPercent ?? 18,
       platformGstPercent: adminSettings?.platformFeeGstPercent ?? 18,
       adminCommissionAmount: adminCommission,
       adminCommissionGstPercent,
@@ -368,22 +375,22 @@ exports.placeOrder = async (req, res) => {
     canonicalSettlement.restaurantNet = restaurantEarningSum;
     canonicalSettlement.restaurantNetEarning = restaurantEarningSum;
     canonicalSettlement.customerRestaurantBill = canonicalSettlement.finalPayableToRestaurant;
-    canonicalSettlement.restaurantGross = Math.round((bill.itemTotal || 0) * 100) / 100;
-    canonicalSettlement.totalAdminCommissionDeduction = Math.round((adminCommission + adminCommissionGstTotal) * 100) / 100;
+    canonicalSettlement.restaurantGross = toMoney(bill.itemTotal || 0);
+    canonicalSettlement.totalAdminCommissionDeduction = toMoney(adminCommission + adminCommissionGstTotal);
 
     // ── Rider Earnings ───────────────────────────────────────────────────────
     // Rider receives: deliveryFee (pre-GST) + platformFee (pre-GST) + incentive.
     // The 18% GST on (deliveryFee + platformFee) goes to admin wallet as gstOnPlatform.
 
     // Rider delivery charge = full delivery fee collected from customer (System A — snapshot)
-    const riderDeliveryCharge = Math.round((bill.deliveryFee || 0) * 100) / 100;
+    const riderDeliveryCharge = toMoney(bill.deliveryFee || 0);
     // Rider receives the pre-GST platform fee; the 18% GST portion goes to admin wallet.
-    const riderPlatformFeeShare = Math.round((bill.platformFee || 0) * 100) / 100;
+    const riderPlatformFeeShare = toMoney(bill.platformFee || 0);
     // Admin's platform GST earning = 18% on (deliveryFee + platformFee) combined
-    const adminPlatformFeeShare = Math.round((canonicalSettlement.gstOnPlatform || 0) * 100) / 100;
+    const adminPlatformFeeShare = toMoney(canonicalSettlement.gstOnPlatform || 0);
     // Incentive: % of item subtotal (before GST/fees)
-    const riderIncentiveAmount = Math.max(0, Math.round((bill.itemTotal * (incentivePercent / 100)) * 100) / 100);
-    const riderTipAmount = Math.max(0, Math.round((tipAmount || 0) * 100) / 100);
+    const riderIncentiveAmount = Math.max(0, toMoney(bill.itemTotal * (incentivePercent / 100)));
+    const riderTipAmount = Math.max(0, toMoney(tipAmount || 0));
 
     const riderEarningsData = {
       deliveryCharge: riderDeliveryCharge,
@@ -391,7 +398,7 @@ exports.placeOrder = async (req, res) => {
       incentive: riderIncentiveAmount,
       tip: riderTipAmount,
       incentivePercentAtCompletion: incentivePercent,
-      totalRiderEarning: Math.max(0, Math.round((riderDeliveryCharge + riderPlatformFeeShare + riderIncentiveAmount + riderTipAmount) * 100) / 100),
+      totalRiderEarning: Math.max(0, toMoney(riderDeliveryCharge + riderPlatformFeeShare + riderIncentiveAmount + riderTipAmount)),
       earnedAt: new Date(),
     };
     const pickupOtp = Math.floor(1000 + Math.random() * 9000).toString();
@@ -403,7 +410,30 @@ exports.placeOrder = async (req, res) => {
     // restaurantNetEarning   = what the restaurant actually keeps after admin commission
     //   (= Σ items[].restaurantEarningAmount = itemTotal − adminCommission)
     // These are two different quantities and must never overwrite each other.
-    const customerRestaurantBill = Math.round(((canonicalSettlement.finalPayableToRestaurant) || 0) * 100) / 100;
+    const customerRestaurantBill = toMoney((canonicalSettlement.finalPayableToRestaurant) || 0);
+    const cgstAdminCommission = toMoney(adminCommissionGstTotal / 2);
+    const sgstAdminCommission = toMoney(adminCommissionGstTotal - cgstAdminCommission);
+    const totalGstCollected = toMoney(
+      (canonicalSettlement.gstOnFood || 0)
+      + (canonicalSettlement.packagingGST || 0)
+      + (canonicalSettlement.deliveryGst || 0)
+      + (canonicalSettlement.gstOnPlatform || 0)
+      + adminCommissionGstTotal,
+    );
+    const cgstTotalForAdmin = toMoney(
+      (canonicalSettlement.cgstOnFood || 0)
+      + (canonicalSettlement.cgstOnPackaging || 0)
+      + (canonicalSettlement.cgstDelivery || 0)
+      + (canonicalSettlement.cgstPlatform || 0)
+      + cgstAdminCommission,
+    );
+    const sgstTotalForAdmin = toMoney(
+      (canonicalSettlement.sgstOnFood || 0)
+      + (canonicalSettlement.sgstOnPackaging || 0)
+      + (canonicalSettlement.sgstDelivery || 0)
+      + (canonicalSettlement.sgstPlatform || 0)
+      + sgstAdminCommission,
+    );
 
     const orderDoc = {
       customer: user._id,
@@ -432,8 +462,24 @@ exports.placeOrder = async (req, res) => {
         restaurantNet: restaurantEarningSum,
         restaurantNetEarning: restaurantEarningSum,
         adminCommissionGst: adminCommissionGstTotal,
+        cgstAdminCommission,
+        sgstAdminCommission,
         adminCommissionGstPercent,
-        totalAdminCommissionDeduction: Math.round((adminCommission + adminCommissionGstTotal) * 100) / 100,
+        deliveryGst: canonicalSettlement.deliveryGst,
+        cgstDelivery: canonicalSettlement.cgstDelivery,
+        sgstDelivery: canonicalSettlement.sgstDelivery,
+        deliveryChargeGstPercent: canonicalSettlement.deliveryChargeGstPercent,
+        totalAdminCommissionDeduction: toMoney(adminCommission + adminCommissionGstTotal),
+        totalGstCollected,
+        totalGstBreakdownForAdmin: {
+          foodGst: toMoney(canonicalSettlement.gstOnFood || 0),
+          packagingGst: toMoney(canonicalSettlement.packagingGST || 0),
+          deliveryGst: toMoney(canonicalSettlement.deliveryGst || 0),
+          platformGst: toMoney(canonicalSettlement.gstOnPlatform || 0),
+          adminCommissionGst: toMoney(adminCommissionGstTotal),
+          cgstTotal: cgstTotalForAdmin,
+          sgstTotal: sgstTotalForAdmin,
+        },
         riderDeliveryEarning: riderEarningsData.deliveryCharge,
         riderIncentive: riderIncentiveAmount,
         riderTip: riderTipAmount,
@@ -3043,7 +3089,7 @@ const RiderBill      = require('../models/RiderBill');
 
 const asAmount = (value) => {
   const numeric = Number(value);
-  return Number.isFinite(numeric) ? Math.round(numeric * 100) / 100 : 0;
+  return Number.isFinite(numeric) ? Number(numeric.toFixed(5)) : 0;
 };
 
 const splitGst = (value) => {
@@ -3069,11 +3115,14 @@ const buildBillingSectionsFromOrder = (orderLike) => {
   const packagingCharge = asAmount(pb.packagingCharge ?? order.packaging ?? 0);
   const packagingGst = asAmount(pb.packagingGST ?? 0);
   const deliveryFee = asAmount(pb.deliveryCharge ?? order.deliveryFee ?? 0);
+  const deliveryGst = asAmount(pb.deliveryGst ?? 0);
+  const cgstDelivery = asAmount(pb.cgstDelivery ?? (deliveryGst / 2));
+  const sgstDelivery = asAmount(pb.sgstDelivery ?? (deliveryGst - cgstDelivery));
   const platformFee = asAmount(order.platformFee ?? pb.platformFee ?? 0);
   const tip = asAmount(order.tip ?? 0);
 
-  const totalCgstCustomer = asAmount((pb.cgstOnFood ?? (gstOnFood / 2)) + (pb.cgstOnPackaging ?? (packagingGst / 2)) + (pb.cgstPlatform ?? (asAmount(pb.gstOnPlatform ?? 0) / 2)));
-  const totalSgstCustomer = asAmount((pb.sgstOnFood ?? (gstOnFood / 2)) + (pb.sgstOnPackaging ?? (packagingGst / 2)) + (pb.sgstPlatform ?? (asAmount(pb.gstOnPlatform ?? 0) / 2)));
+  const totalCgstCustomer = asAmount((pb.cgstOnFood ?? (gstOnFood / 2)) + (pb.cgstOnPackaging ?? (packagingGst / 2)) + cgstDelivery + (pb.cgstPlatform ?? (asAmount(pb.gstOnPlatform ?? 0) / 2)));
+  const totalSgstCustomer = asAmount((pb.sgstOnFood ?? (gstOnFood / 2)) + (pb.sgstOnPackaging ?? (packagingGst / 2)) + sgstDelivery + (pb.sgstPlatform ?? (asAmount(pb.gstOnPlatform ?? 0) / 2)));
   const totalGstCustomer = asAmount(totalCgstCustomer + totalSgstCustomer);
 
   const commissionAmount = asAmount(order.adminCommission ?? 0);
@@ -3115,6 +3164,9 @@ const buildBillingSectionsFromOrder = (orderLike) => {
       sgstFood,
       packagingCharge,
       deliveryFee,
+      deliveryGst,
+      cgstDelivery,
+      sgstDelivery,
       platformFee,
       tip,
       totalGstSummary: {
@@ -3190,6 +3242,9 @@ const buildBillingSectionsFromOrder = (orderLike) => {
       retainedByPlatform,
       gstBreakdown: {
         gstOnCommission,
+        deliveryGst,
+        cgstDelivery,
+        sgstDelivery,
         gstOnPlatform,
         totalCgst: totalCgstPlatform,
         totalSgst: totalSgstPlatform,

@@ -21,7 +21,11 @@ const RiderBill   = require('../models/RiderBill');
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+const r2 = (n) => {
+  const numeric = Number(n);
+  if (!Number.isFinite(numeric)) return 0;
+  return Number(numeric.toFixed(5));
+};
 
 /**
  * Build a GST breakdown object.
@@ -139,7 +143,13 @@ async function generateBills(orderId) {
   };
 
   // Delivery charge GST (18% by default, admin-configurable)
-  const gstOnDelivery = makeGstBlock(deliveryCharge, gstRates.deliveryChargeGstPercent);
+  const gstOnDelivery = {
+    percent: r2(pb.deliveryChargeGstPercent ?? gstRates.deliveryChargeGstPercent),
+    base: r2(deliveryCharge),
+    total: r2(pb.deliveryGst ?? (deliveryCharge * ((pb.deliveryChargeGstPercent ?? gstRates.deliveryChargeGstPercent) / 100))),
+    cgst: r2(pb.cgstDelivery ?? ((pb.deliveryGst ?? (deliveryCharge * ((pb.deliveryChargeGstPercent ?? gstRates.deliveryChargeGstPercent) / 100))) / 2)),
+    sgst: r2(pb.sgstDelivery ?? ((pb.deliveryGst ?? (deliveryCharge * ((pb.deliveryChargeGstPercent ?? gstRates.deliveryChargeGstPercent) / 100))) / 2)),
+  };
 
   // Admin commission GST (18%, the platform charges this to the restaurant)
   const gstOnAdminCommission = makeGstBlock(adminCommissionAmount, gstRates.adminCommissionGstPercent);

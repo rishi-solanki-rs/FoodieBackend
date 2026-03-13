@@ -1,5 +1,9 @@
+const MONEY_SCALE = 5;
+
 function round(value) {
-  return Math.round((Number(value) || 0) * 100) / 100;
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return 0;
+  return Number(numeric.toFixed(MONEY_SCALE));
 }
 
 function clamp(value, min, max) {
@@ -27,6 +31,7 @@ function calculateSettlementBreakdown({
   // Platform bill inputs
   deliveryFee = 0,
   platformFee = 0,
+  deliveryChargeGstPercent = 18,
   platformGstPercent = 0,
   // Settlement inputs
   adminCommissionAmount = 0,
@@ -55,6 +60,11 @@ function calculateSettlementBreakdown({
   const safePlatformFee = round(Math.max(0, platformFee));
   const platformComponents = round(safeDeliveryFee + safePlatformFee);
 
+  const safeDeliveryChargeGstPercent = round(Math.max(0, deliveryChargeGstPercent));
+  const deliveryGst = round(safeDeliveryFee * (safeDeliveryChargeGstPercent / 100));
+  const cgstDelivery = round(deliveryGst / 2);
+  const sgstDelivery = round(deliveryGst - cgstDelivery);
+
   // ── Platform-first discount distribution ───────────────────────────────────
   // Coupon discount first absorbs the platform bill; remainder reduces restaurant bill.
   const totalDiscountable = round(restaurantBillTotal + platformComponents);
@@ -73,7 +83,7 @@ function calculateSettlementBreakdown({
   const gstOnPlatform = round(taxablePlatformAmount * (Math.max(0, platformGstPercent) / 100));
   const cgstPlatform = round(gstOnPlatform / 2);
   const sgstPlatform = round(gstOnPlatform - cgstPlatform);
-  const platformBillTotal = round(taxablePlatformAmount + gstOnPlatform);
+  const platformBillTotal = round(taxablePlatformAmount + gstOnPlatform + deliveryGst);
 
   // ── Canonical settlement fields ───────────────────────────────────────────
   // Business rule:
@@ -83,6 +93,29 @@ function calculateSettlementBreakdown({
   const adminCommissionGst = round(
     safeAdminCommissionAmount * (Math.max(0, adminCommissionGstPercent) / 100),
   );
+  const cgstAdminCommission = round(adminCommissionGst / 2);
+  const sgstAdminCommission = round(adminCommissionGst - cgstAdminCommission);
+
+  const totalGstCollected = round(
+    gstOnFood + packagingGST + deliveryGst + gstOnPlatform + adminCommissionGst,
+  );
+  const totalCgstForAdmin = round(
+    cgstOnFood + cgstOnPackaging + cgstDelivery + cgstPlatform + cgstAdminCommission,
+  );
+  const totalSgstForAdmin = round(
+    sgstOnFood + sgstOnPackaging + sgstDelivery + sgstPlatform + sgstAdminCommission,
+  );
+
+  const totalGstBreakdownForAdmin = {
+    foodGst: gstOnFood,
+    packagingGst: packagingGST,
+    deliveryGst,
+    platformGst: gstOnPlatform,
+    adminCommissionGst,
+    cgstTotal: totalCgstForAdmin,
+    sgstTotal: totalSgstForAdmin,
+  };
+
   const restaurantNet = round(Math.max(
     0,
     taxableAmountFood - safeAdminCommissionAmount - adminCommissionGst,
@@ -110,6 +143,10 @@ function calculateSettlementBreakdown({
     finalPayableToRestaurant,
     // ── Platform bill ─────────────────────────────────────────────────────────
     deliveryFee: safeDeliveryFee,
+    deliveryGst,
+    cgstDelivery,
+    sgstDelivery,
+    deliveryChargeGstPercent: safeDeliveryChargeGstPercent,
     platformFee: safePlatformFee,
     taxablePlatformAmount,
     gstOnPlatform,
@@ -124,6 +161,10 @@ function calculateSettlementBreakdown({
     adminCommissionAmount: safeAdminCommissionAmount,
     adminCommissionGstPercent: round(Math.max(0, adminCommissionGstPercent)),
     adminCommissionGst,
+    cgstAdminCommission,
+    sgstAdminCommission,
+    totalGstCollected,
+    totalGstBreakdownForAdmin,
     restaurantNet,
     restaurantNetEarning,
     customerRestaurantBill,

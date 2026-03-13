@@ -26,8 +26,12 @@ const { logger } = require('../utils/logger');
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
+const MONEY_SCALE = 5;
+
 function round(value) {
-  return Math.round((Number(value) || 0) * 100) / 100;
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return 0;
+  return Number(numeric.toFixed(MONEY_SCALE));
 }
 
 function toNonNegativeNumber(value, fallback = 0) {
@@ -41,7 +45,7 @@ function toNullableNumber(value) {
   return Number.isFinite(numeric) ? numeric : null;
 }
 
-function nearlyEqual(a, b, tolerance = 0.02) {
+function nearlyEqual(a, b, tolerance = 0.00002) {
   return Math.abs(round(a) - round(b)) <= tolerance;
 }
 
@@ -142,6 +146,7 @@ async function getAdminSettings() {
     defaultGstPercent: settings?.defaultGstPercent ?? 5,
     platformFee: settings?.platformFee ?? 9,
     platformFeeGstPercent: settings?.platformFeeGstPercent ?? 18,
+    deliveryChargeGstPercent: settings?.deliveryChargeGstPercent ?? 18,
     adminCommissionGstPercent: settings?.adminCommissionGstPercent ?? 18,
     smallCartThreshold: settings?.smallCartThreshold ?? 0,
     smallCartFee: settings?.smallCartFee ?? 0,
@@ -328,12 +333,13 @@ async function calculateOrderPrice({
       // Pass platform bill so settlement can apply platform-first discount distribution
       deliveryFee: safeDeliveryFee,
       platformFee,
+      deliveryChargeGstPercent: adminSettings.deliveryChargeGstPercent,
       platformGstPercent: adminSettings.platformFeeGstPercent, // 18% GST on platform fee + delivery (service tax)
       adminCommissionAmount: estimatedAdminCommission,
       adminCommissionGstPercent: adminSettings.adminCommissionGstPercent,
     });
 
-    const gstTotalForOrder = round(settlement.gstOnFood + settlement.packagingGST);
+    const gstTotalForOrder = round(settlement.gstOnFood + settlement.packagingGST + settlement.deliveryGst + settlement.gstOnPlatform);
 
     // 7. Grand total = restaurant bill (post-discount) + platform bill (post-discount) + tip
     let totalAmount = settlement.finalPayableToRestaurant + settlement.platformBillTotal + smallCartFee + round(tip);
@@ -375,7 +381,7 @@ async function calculateOrderPrice({
         taxRate: null,
         surgeFee: 0,
         surgeMultiplier: 1,
-        subtotal: round(settlement.restaurantBillTotal + safeDeliveryFee + platformFee),
+        subtotal: round(settlement.restaurantBillTotal + safeDeliveryFee + settlement.deliveryGst + platformFee + settlement.gstOnPlatform),
       },
       coupon: {
         code: couponCode || null,

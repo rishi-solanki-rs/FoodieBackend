@@ -12,7 +12,11 @@ const { generateBills } = require('./billingService');
 const { validateOrderFinancialIntegrity } = require('./financialIntegrityService');
 const { logger } = require('../utils/logger');
 
-const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+const r2 = (n) => {
+  const numeric = Number(n);
+  if (!Number.isFinite(numeric)) return 0;
+  return Number(numeric.toFixed(5));
+};
 
 async function acquireSettlementLock(orderId) {
   const lock = await Order.updateOne(

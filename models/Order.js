@@ -83,6 +83,10 @@ const orderSchema = new mongoose.Schema(
       sgstOnPackaging: { type: Number, default: 0 },
       // Platform bill section (invoice v2)
       deliveryCharge: { type: Number, default: 0 },
+      deliveryGst: { type: Number, default: 0 },
+      cgstDelivery: { type: Number, default: 0 },
+      sgstDelivery: { type: Number, default: 0 },
+      deliveryChargeGstPercent: { type: Number, default: 18 },
       taxablePlatformAmount: { type: Number, default: 0 },
       gstOnPlatform: { type: Number, default: 0 },
       cgstPlatform: { type: Number, default: 0 },
@@ -100,8 +104,20 @@ const orderSchema = new mongoose.Schema(
       adminPlatformFeeShare: { type: Number, default: 0 },  // = gstOnPlatform: 18% GST on delivery+platform fee → admin wallet
       // Admin commission GST (invoice v2) — GST on restaurant commission, deducted from restaurant earnings
       adminCommissionGst: { type: Number, default: 0 },            // adminCommission × 18%
+      cgstAdminCommission: { type: Number, default: 0 },
+      sgstAdminCommission: { type: Number, default: 0 },
       adminCommissionGstPercent: { type: Number, default: 18 },    // GST rate applied
       totalAdminCommissionDeduction: { type: Number, default: 0 }, // adminCommission + adminCommissionGst
+      totalGstCollected: { type: Number, default: 0 },
+      totalGstBreakdownForAdmin: {
+        foodGst: { type: Number, default: 0 },
+        packagingGst: { type: Number, default: 0 },
+        deliveryGst: { type: Number, default: 0 },
+        platformGst: { type: Number, default: 0 },
+        adminCommissionGst: { type: Number, default: 0 },
+        cgstTotal: { type: Number, default: 0 },
+        sgstTotal: { type: Number, default: 0 },
+      },
       computedVersion: { type: String, default: "settlement-v1" },
       computedAt: { type: Date, default: Date.now },
     },

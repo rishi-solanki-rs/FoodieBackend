@@ -2,8 +2,12 @@
 
 const { logger } = require('../utils/logger');
 
-const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
-const nearlyEqual = (a, b, tol = 0.02) => Math.abs(r2(a) - r2(b)) <= tol;
+const r2 = (n) => {
+  const numeric = Number(n);
+  if (!Number.isFinite(numeric)) return 0;
+  return Number(numeric.toFixed(5));
+};
+const nearlyEqual = (a, b, tol = 0.00002) => Math.abs(r2(a) - r2(b)) <= tol;
 
 function validateOrderFinancialIntegrity(orderLike) {
   const order = orderLike || {};
@@ -41,10 +45,68 @@ function validateOrderFinancialIntegrity(orderLike) {
     }
   }
 
+  // 3b) Packaging GST split integrity
+  if (!nearlyEqual((pb.cgstOnPackaging || 0) + (pb.sgstOnPackaging || 0), pb.packagingGST || 0)) {
+    issues.push('packaging GST split mismatch: cgstOnPackaging + sgstOnPackaging != packagingGST');
+  }
+
+  // 3c) Delivery GST split integrity
+  if (!nearlyEqual((pb.cgstDelivery || 0) + (pb.sgstDelivery || 0), pb.deliveryGst || 0)) {
+    issues.push('delivery GST split mismatch: cgstDelivery + sgstDelivery != deliveryGst');
+  }
+
+  // 3d) Platform GST split integrity
+  if (!nearlyEqual((pb.cgstPlatform || 0) + (pb.sgstPlatform || 0), pb.gstOnPlatform || 0)) {
+    issues.push('platform GST split mismatch: cgstPlatform + sgstPlatform != gstOnPlatform');
+  }
+
+  // 3e) Admin commission GST split integrity
+  if (!nearlyEqual((pb.cgstAdminCommission || 0) + (pb.sgstAdminCommission || 0), pb.adminCommissionGst || 0)) {
+    issues.push('admin commission GST split mismatch: cgstAdminCommission + sgstAdminCommission != adminCommissionGst');
+  }
+
+  // 3f) totalGstCollected integrity
+  const totalGstExpected = r2(
+    (pb.gstOnFood || 0)
+      + (pb.packagingGST || 0)
+      + (pb.deliveryGst || 0)
+      + (pb.gstOnPlatform || 0)
+      + (pb.adminCommissionGst || 0),
+  );
+  if (!nearlyEqual(pb.totalGstCollected || 0, totalGstExpected)) {
+    issues.push('totalGstCollected mismatch: gstOnFood + packagingGST + deliveryGst + gstOnPlatform + adminCommissionGst');
+  }
+
+  // 3g) Admin GST summary split integrity
+  const totalCgstExpected = r2(
+    (pb.cgstOnFood || 0)
+      + (pb.cgstOnPackaging || 0)
+      + (pb.cgstDelivery || 0)
+      + (pb.cgstPlatform || 0)
+      + (pb.cgstAdminCommission || 0),
+  );
+  const totalSgstExpected = r2(
+    (pb.sgstOnFood || 0)
+      + (pb.sgstOnPackaging || 0)
+      + (pb.sgstDelivery || 0)
+      + (pb.sgstPlatform || 0)
+      + (pb.sgstAdminCommission || 0),
+  );
+  const adminGstSummary = pb.totalGstBreakdownForAdmin || {};
+  if (!nearlyEqual(adminGstSummary.cgstTotal || 0, totalCgstExpected)) {
+    issues.push('totalGstBreakdownForAdmin.cgstTotal mismatch');
+  }
+  if (!nearlyEqual(adminGstSummary.sgstTotal || 0, totalSgstExpected)) {
+    issues.push('totalGstBreakdownForAdmin.sgstTotal mismatch');
+  }
+  if (!nearlyEqual((adminGstSummary.cgstTotal || 0) + (adminGstSummary.sgstTotal || 0), pb.totalGstCollected || 0)) {
+    issues.push('GST summary mismatch: cgstTotal + sgstTotal != totalGstCollected');
+  }
+
   // 4) Platform bill integrity
-  const platformBillExpected = r2((pb.taxablePlatformAmount || 0) + (pb.gstOnPlatform || 0));
+  const platformBillExpected = r2((pb.taxablePlatformAmount || 0) + (pb.gstOnPlatform || 0) + (pb.deliveryGst || 0));
   if (!nearlyEqual(pb.platformBillTotal || 0, platformBillExpected)) {
-    issues.push('platformBillTotal mismatch: taxablePlatformAmount + gstOnPlatform');
+    issues.push('platformBillTotal mismatch: taxablePlatformAmount + gstOnPlatform + deliveryGst');
   }
 
   // 5) Discount distribution integrity
