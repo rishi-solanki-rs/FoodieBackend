@@ -1,4 +1,78 @@
 const mongoose = require("mongoose");
+
+const MONEY_SCALE = 5;
+
+function roundMoney(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return 0;
+  return Number(numeric.toFixed(MONEY_SCALE));
+}
+
+function splitGst(total) {
+  const safeTotal = roundMoney(total);
+  const cgst = roundMoney(safeTotal / 2);
+  const sgst = roundMoney(safeTotal - cgst);
+  return { cgst, sgst, total: safeTotal };
+}
+
+function normalizePaymentBreakdown(pb) {
+  if (!pb || typeof pb !== 'object') return;
+
+  const foodSplit = splitGst(pb.gstOnFood || 0);
+  pb.cgstOnFood = foodSplit.cgst;
+  pb.sgstOnFood = foodSplit.sgst;
+
+  const packagingSplit = splitGst(pb.packagingGST || 0);
+  pb.cgstOnPackaging = packagingSplit.cgst;
+  pb.sgstOnPackaging = packagingSplit.sgst;
+
+  const deliverySplit = splitGst(pb.deliveryGst || 0);
+  pb.cgstDelivery = deliverySplit.cgst;
+  pb.sgstDelivery = deliverySplit.sgst;
+
+  const platformSplit = splitGst(pb.gstOnPlatform || 0);
+  pb.cgstPlatform = platformSplit.cgst;
+  pb.sgstPlatform = platformSplit.sgst;
+
+  const adminCommissionSplit = splitGst(pb.adminCommissionGst || 0);
+  pb.cgstAdminCommission = adminCommissionSplit.cgst;
+  pb.sgstAdminCommission = adminCommissionSplit.sgst;
+
+  pb.totalGstCollected = roundMoney(
+    (pb.gstOnFood || 0)
+    + (pb.packagingGST || 0)
+    + (pb.deliveryGst || 0)
+    + (pb.gstOnPlatform || 0)
+    + (pb.adminCommissionGst || 0),
+  );
+
+  const cgstTotal = roundMoney(
+    (pb.cgstOnFood || 0)
+    + (pb.cgstOnPackaging || 0)
+    + (pb.cgstDelivery || 0)
+    + (pb.cgstPlatform || 0)
+    + (pb.cgstAdminCommission || 0),
+  );
+  const sgstTotal = roundMoney(
+    (pb.sgstOnFood || 0)
+    + (pb.sgstOnPackaging || 0)
+    + (pb.sgstDelivery || 0)
+    + (pb.sgstPlatform || 0)
+    + (pb.sgstAdminCommission || 0),
+  );
+
+  const existingSummary = pb.totalGstBreakdownForAdmin || {};
+  pb.totalGstBreakdownForAdmin = {
+    ...existingSummary,
+    foodGst: roundMoney(pb.gstOnFood || 0),
+    packagingGst: roundMoney(pb.packagingGST || 0),
+    deliveryGst: roundMoney(pb.deliveryGst || 0),
+    platformGst: roundMoney(pb.gstOnPlatform || 0),
+    adminCommissionGst: roundMoney(pb.adminCommissionGst || 0),
+    cgstTotal,
+    sgstTotal,
+  };
+}
 const orderSchema = new mongoose.Schema(
   {
     customer: {
@@ -301,4 +375,10 @@ orderSchema.index({ "deliveryAddress.coordinates": "2dsphere" });
 orderSchema.index({ restaurant: 1 });
 orderSchema.index({ paymentStatus: 1 });
 orderSchema.index({ status: 1, restaurant: 1 });
+
+orderSchema.pre('validate', function normalizeFinancialSnapshot(next) {
+  normalizePaymentBreakdown(this.paymentBreakdown);
+  next();
+});
+
 module.exports = mongoose.model("Order", orderSchema);
