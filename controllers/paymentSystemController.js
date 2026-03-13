@@ -7,6 +7,7 @@ const Order = require('../models/Order');
 const Rider = require('../models/Rider');
 const Restaurant = require('../models/Restaurant');
 const Payout = require('../models/Payout');
+const { computeDeliveryFee, getAdminSettings } = require('../services/priceCalculator');
 exports.confirmCODCollection = async (req, res) => {
   return res.status(410).json({ success: false, message: 'COD is not supported. This endpoint has been removed.' });
 };
@@ -155,17 +156,14 @@ exports.calculateDeliveryFee = async (req, res) => {
     if (distanceKm === undefined || isNaN(dist) || dist < 0) {
       return res.status(400).json({ success: false, message: 'distanceKm must be a non-negative number' });
     }
-    const AdminSetting = require('../models/AdminSetting');
-    const settings = await AdminSetting.findOne().lean();
-    const baseFee = settings?.deliveryBaseCharge || 20;
-    const perKmRate = settings?.deliveryPerKmCharge || 5;
-    const deliveryCharge = baseFee + (dist * perKmRate);
+    const settings = await getAdminSettings();
+    const slabs = settings?.deliverySlabs || {};
+    const deliveryCharge = computeDeliveryFee(dist, slabs);
     return res.status(200).json({
       success: true,
       data: {
         distanceKm: dist,
-        baseFee,
-        perKmRate,
+        slabs,
         deliveryCharge: Math.round(deliveryCharge)
       }
     });

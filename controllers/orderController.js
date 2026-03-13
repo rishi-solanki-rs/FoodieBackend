@@ -27,6 +27,7 @@ const { calculateOrderPrice } = require("../services/priceCalculator");
 const { calculateSettlementBreakdown } = require('../services/settlementCalculator');
 const { validateOrderFinancialIntegrity } = require('../services/financialIntegrityService');
 const { processSettlement } = require('../services/settlementService');
+const { computeDeliveryFee, getAdminSettings } = require('../services/priceCalculator');
 const {
   logger,
   logOrderTransition,
@@ -229,7 +230,29 @@ exports.placeOrder = async (req, res) => {
         calculateDistance(restaurant.location.coordinates, deliveryAddress.location.coordinates) * 100
       ) / 100;
     }
-    const bill = await calculateBill(cart, req.user._id, deliveryDistanceKm);
+    let bill = await calculateBill(cart, req.user._id, deliveryDistanceKm);
+    if ((Number(deliveryDistanceKm) || 0) > 0 && (Number(bill.deliveryFee) || 0) <= 0) {
+      const currentAdminSettings = await getAdminSettings();
+      const freeDeliveryActive = Boolean(
+        restaurant.isFreeDelivery &&
+        (Number(bill.itemTotal || 0) >= Number(restaurant.freeDeliveryContribution || 0))
+      );
+
+      if (!freeDeliveryActive) {
+        const recalculatedDeliveryFee = computeDeliveryFee(deliveryDistanceKm, currentAdminSettings.deliverySlabs);
+        logger.error('Order placement detected zero delivery fee for positive distance; recalculating before save', {
+          event: 'ORDER_DELIVERY_FEE_RECALCULATED',
+          restaurantId: String(restaurant._id),
+          userId: String(user._id),
+          deliveryDistanceKm,
+          previousDeliveryFee: Number(bill.deliveryFee || 0),
+          recalculatedDeliveryFee,
+          slabs: currentAdminSettings.deliverySlabs,
+        });
+
+        bill = await calculateBill(cart, req.user._id, deliveryDistanceKm);
+      }
+    }
     const totalPayment = bill.toPay;
     const tipAmount = bill.tip || 0;
     const totalBeforeTip = Math.max(0, totalPayment - tipAmount);
@@ -404,6 +427,7 @@ exports.placeOrder = async (req, res) => {
       totalAmount: bill.toPay,
       paymentBreakdown: {
         ...canonicalSettlement,
+        deliveryCharge: riderEarningsData.deliveryCharge,
         finalPayableToRestaurant: customerRestaurantBill,
         customerRestaurantBill,
         restaurantNet: restaurantEarningSum,

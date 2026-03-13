@@ -21,11 +21,18 @@ const Restaurant = require('../models/Restaurant');
 const Order = require('../models/Order');
 const AdminSetting = require('../models/AdminSetting');
 const { calculateSettlementBreakdown } = require('./settlementCalculator');
+const { logger } = require('../utils/logger');
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function round(value) {
-  return Math.round(value * 100) / 100;
+  return Math.round((Number(value) || 0) * 100) / 100;
+}
+
+function toNonNegativeNumber(value, fallback = 0) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.max(0, numeric);
 }
 
 /**
@@ -67,30 +74,61 @@ async function getAdminSettings() {
  * @returns {number}           - delivery fee in ₹
  */
 function computeDeliveryFee(distanceKm, slabs) {
-  if (!distanceKm || distanceKm <= 0) return 0;
+  const safeDistanceKm = toNonNegativeNumber(distanceKm, 0);
+  if (safeDistanceKm <= 0) return 0;
 
-  const { firstSlabMaxKm, firstSlabRatePerKm,
-    secondSlabMaxKm, secondSlabRatePerKm,
-    thirdSlabRatePerKm,
-    baseDeliveryFee = 0 } = slabs;
+  const firstSlabMaxKm = toNonNegativeNumber(slabs?.firstSlabMaxKm, 5);
+  const firstSlabRatePerKm = toNonNegativeNumber(slabs?.firstSlabRatePerKm, 3);
+  const secondSlabMaxKm = Math.max(firstSlabMaxKm, toNonNegativeNumber(slabs?.secondSlabMaxKm, 10));
+  const secondSlabRatePerKm = toNonNegativeNumber(slabs?.secondSlabRatePerKm, 4);
+  const thirdSlabRatePerKm = toNonNegativeNumber(slabs?.thirdSlabRatePerKm, 6);
+  const baseDeliveryFee = toNonNegativeNumber(slabs?.baseDeliveryFee, 0);
 
-  let fee = Number(baseDeliveryFee) || 0;
+  let fee = baseDeliveryFee;
 
-  if (distanceKm <= firstSlabMaxKm) {
+  if (safeDistanceKm <= firstSlabMaxKm) {
     // Entirely in first slab
-    fee += distanceKm * firstSlabRatePerKm;
-  } else if (distanceKm <= secondSlabMaxKm) {
+    fee += safeDistanceKm * firstSlabRatePerKm;
+  } else if (safeDistanceKm <= secondSlabMaxKm) {
     // First slab fully consumed + remainder in second slab
     fee += (firstSlabMaxKm * firstSlabRatePerKm)
-      + ((distanceKm - firstSlabMaxKm) * secondSlabRatePerKm);
+      + ((safeDistanceKm - firstSlabMaxKm) * secondSlabRatePerKm);
   } else {
     // All three slabs
     fee += (firstSlabMaxKm * firstSlabRatePerKm)
       + ((secondSlabMaxKm - firstSlabMaxKm) * secondSlabRatePerKm)
-      + ((distanceKm - secondSlabMaxKm) * thirdSlabRatePerKm);
+      + ((safeDistanceKm - secondSlabMaxKm) * thirdSlabRatePerKm);
   }
 
   return round(fee);
+}
+
+function shouldApplyFreeDelivery({ restaurant, itemTotal, couponResult }) {
+  if (couponResult?.freeDelivery) return true;
+  if (!restaurant?.isFreeDelivery) return false;
+  const threshold = toNonNegativeNumber(restaurant?.freeDeliveryContribution, 0);
+  return Number(itemTotal || 0) >= threshold;
+}
+
+function resolveDeliveryFee({ distanceKm, slabs, restaurant, itemTotal, couponResult }) {
+  if (shouldApplyFreeDelivery({ restaurant, itemTotal, couponResult })) {
+    return 0;
+  }
+
+  const deliveryFee = computeDeliveryFee(distanceKm, slabs);
+  if ((Number(distanceKm) || 0) > 0 && deliveryFee <= 0) {
+    logger.error('Delivery fee evaluated to zero for positive delivery distance', {
+      event: 'DELIVERY_FEE_ZERO_GUARD',
+      distanceKm: Number(distanceKm || 0),
+      deliveryFee,
+      slabs,
+      restaurantId: restaurant?._id ? String(restaurant._id) : null,
+      itemTotal: Number(itemTotal || 0),
+      freeDeliveryApplied: false,
+    });
+  }
+
+  return round(Math.max(0, deliveryFee));
 }
 
 // ─── Main calculator ─────────────────────────────────────────────────────────
@@ -154,10 +192,13 @@ async function calculateOrderPrice({
     const packaging = round(restaurant.packagingCharge || 0);
 
     // 3. Delivery fee (distance slabs from AdminSetting)
-    let deliveryFee = computeDeliveryFee(deliveryDistance, adminSettings.deliverySlabs);
-    if (restaurant.isFreeDelivery && itemTotal >= (restaurant.freeDeliveryContribution || 0)) {
-      deliveryFee = 0;
-    }
+    const deliveryFee = resolveDeliveryFee({
+      distanceKm: deliveryDistance,
+      slabs: adminSettings.deliverySlabs,
+      restaurant,
+      itemTotal,
+      couponResult: null,
+    });
 
     // 4. Platform fee (global, from AdminSetting)
     const platformFee = round(adminSettings.platformFee);
@@ -170,18 +211,13 @@ async function calculateOrderPrice({
     // 5. Coupon / discount
     const couponResult = await validateAndApplyCoupon({ couponCode, itemTotal, restaurantId, userId, deliveryFee });
     const discount = round(couponResult.discount);
-    const finalDeliveryFee = couponResult.freeDelivery ? 0 : deliveryFee;
-
-    // Guardrail: avoid unintended zero delivery fee for positive-distance non-free deliveries.
-    const safeDeliveryFee = (() => {
-      if (couponResult.freeDelivery) return 0;
-      if (restaurant.isFreeDelivery) return finalDeliveryFee;
-      if ((Number(deliveryDistance) || 0) > 0 && (Number(finalDeliveryFee) || 0) <= 0) {
-        const fallback = round((adminSettings.deliverySlabs?.baseDeliveryFee || 0) + (adminSettings.deliverySlabs?.firstSlabRatePerKm || 0));
-        return Math.max(0, fallback);
-      }
-      return round(finalDeliveryFee);
-    })();
+    const safeDeliveryFee = resolveDeliveryFee({
+      distanceKm: deliveryDistance,
+      slabs: adminSettings.deliverySlabs,
+      restaurant,
+      itemTotal,
+      couponResult,
+    });
 
     // 6. Canonical restaurant billing + platform settlement breakdown
     const effectiveFoodGstPercent = itemTotal > 0 ? round((gstTotal / itemTotal) * 100) : adminSettings.defaultGstPercent;
@@ -329,6 +365,7 @@ async function recalculateOrderPrice(order) {
 module.exports = {
   calculateOrderPrice,
   computeDeliveryFee,
+  resolveDeliveryFee,
   validateAndApplyCoupon,
   recalculateOrderPrice,
   getAdminSettings,

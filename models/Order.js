@@ -75,6 +75,7 @@ const orderSchema = new mongoose.Schema(
       cgstOnPackaging: { type: Number, default: 0 },
       sgstOnPackaging: { type: Number, default: 0 },
       // Platform bill section (invoice v2)
+      deliveryCharge: { type: Number, default: 0 },
       taxablePlatformAmount: { type: Number, default: 0 },
       gstOnPlatform: { type: Number, default: 0 },
       cgstPlatform: { type: Number, default: 0 },
