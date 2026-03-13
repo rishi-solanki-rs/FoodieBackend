@@ -588,8 +588,9 @@ exports.getRiderProfile = async (req, res) => {
     const deliveredOrders = orders.filter(o => o.status === 'delivered').length;
     const cancelledOrders = orders.filter(o => o.status === 'cancelled').length;
     const totalEarnings = orders.reduce((sum, o) => {
-      if (typeof o.riderEarning === "number") return sum + o.riderEarning;
-      return sum + (o.riderCommission || 0) + (o.tip || 0);
+      const canonical = Number(o?.riderEarnings?.totalRiderEarning || 0);
+      if (canonical > 0) return sum + canonical;
+      return sum + Number(o.riderEarning || 0);
     }, 0);
     res.status(200).json({
       success: true,
@@ -673,7 +674,7 @@ exports.getRiderDashboard = async (req, res) => {
       }),
       Order.aggregate([
         { $match: { rider: riderProfile._id, status: "delivered" } },
-        { $group: { _id: null, earnings: { $sum: "$riderEarning" } } },
+        { $group: { _id: null, earnings: { $sum: { $ifNull: ["$riderEarnings.totalRiderEarning", 0] } } } },
       ]),
       Order.aggregate([
         {
@@ -683,10 +684,10 @@ exports.getRiderDashboard = async (req, res) => {
             deliveredAt: { $gte: startOfDay },
           },
         },
-        { $group: { _id: null, earnings: { $sum: "$riderEarning" } } },
+        { $group: { _id: null, earnings: { $sum: { $ifNull: ["$riderEarnings.totalRiderEarning", 0] } } } },
       ]),
       Order.findOne({ rider: riderProfile._id, status: { $in: activeStatuses } })
-        .select('_id status deliveryAddress.addressLine restaurant deliveryFee tip riderEarning totalAmount paymentMethod')
+        .select('_id status deliveryAddress.addressLine restaurant deliveryFee tip riderEarnings totalAmount paymentMethod')
         .populate("customer", "name mobile")
         .populate("restaurant", "name address location contactNumber")
         .sort({ updatedAt: -1, createdAt: -1 }),
@@ -1101,7 +1102,7 @@ exports.getEarningsSummary = async (req, res) => {
     const [agg, wallet] = await Promise.all([
       Order.aggregate([
         { $match: match },
-        { $group: { _id: groupId, earnings: { $sum: '$riderEarning' }, orders: { $sum: 1 } } },
+        { $group: { _id: groupId, earnings: { $sum: { $ifNull: ['$riderEarnings.totalRiderEarning', 0] } }, orders: { $sum: 1 } } },
         { $sort: { _id: -1 } }
       ]),
       RiderWallet.findOne({ rider: riderProfile._id }),
@@ -1154,7 +1155,7 @@ exports.riderSettlementReport = async (req, res) => {
       if (format === 'csv') {
         let csv = 'orderId,date,totalAmount,riderEarning,cashCollected,paymentMethod,deliveredAt\n';
         orders.forEach(o => {
-          csv += `${o._id},${o.createdAt.toISOString().split('T')[0]},${(o.totalAmount || 0).toFixed(2)},${(o.riderEarning || 0).toFixed(2)},${(o.cashCollected || 0).toFixed(2)},${o.paymentMethod || ''},${o.deliveredAt ? o.deliveredAt.toISOString() : ''}\n`;
+          csv += `${o._id},${o.createdAt.toISOString().split('T')[0]},${(o.totalAmount || 0).toFixed(2)},${(o.riderEarnings?.totalRiderEarning || 0).toFixed(2)},${(o.cashCollected || 0).toFixed(2)},${o.paymentMethod || ''},${o.deliveredAt ? o.deliveredAt.toISOString() : ''}\n`;
         });
         res.header('Content-Type', 'text/csv');
         res.header('Content-Disposition', `attachment; filename="rider-settlements-${from || 'all'}-${to || 'now'}.csv"`);
@@ -1164,7 +1165,7 @@ exports.riderSettlementReport = async (req, res) => {
     }
     const agg = await Order.aggregate([
       { $match: match },
-      { $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$deliveredAt' } }, orders: { $sum: 1 }, earnings: { $sum: '$riderEarning' }, cashCollected: { $sum: '$cashCollected' } } },
+      { $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$deliveredAt' } }, orders: { $sum: 1 }, earnings: { $sum: '$riderEarnings.totalRiderEarning' }, cashCollected: { $sum: '$cashCollected' } } },
       { $sort: { _id: -1 } }
     ]);
     if (format === 'csv') {
@@ -1241,7 +1242,7 @@ exports.adminRiderSettlements = async (req, res) => {
         let csv = 'orderId,riderId,riderName,date,totalAmount,riderEarning,cashCollected,deliveredAt\n';
         orders.forEach(o => {
           const riderName = o.rider && o.rider.user && o.rider.user.name ? o.rider.user.name : '';
-          csv += `${o._id},${o.rider || ''},${riderName},${o.createdAt.toISOString().split('T')[0]},${(o.totalAmount || 0).toFixed(2)},${(o.riderEarning || 0).toFixed(2)},${(o.cashCollected || 0).toFixed(2)},${o.deliveredAt ? o.deliveredAt.toISOString() : ''}\n`;
+          csv += `${o._id},${o.rider || ''},${riderName},${o.createdAt.toISOString().split('T')[0]},${(o.totalAmount || 0).toFixed(2)},${(o.riderEarnings?.totalRiderEarning || 0).toFixed(2)},${(o.cashCollected || 0).toFixed(2)},${o.deliveredAt ? o.deliveredAt.toISOString() : ''}\n`;
         });
         res.header('Content-Type', 'text/csv');
         res.header('Content-Disposition', `attachment; filename="admin-rider-orders-${from || 'all'}-${to || 'now'}.csv"`);
@@ -1251,7 +1252,7 @@ exports.adminRiderSettlements = async (req, res) => {
     }
     const agg = await Order.aggregate([
       { $match: match },
-      { $group: { _id: '$rider', orders: { $sum: 1 }, earnings: { $sum: '$riderEarning' }, cashCollected: { $sum: '$cashCollected' } } },
+      { $group: { _id: '$rider', orders: { $sum: 1 }, earnings: { $sum: '$riderEarnings.totalRiderEarning' }, cashCollected: { $sum: '$cashCollected' } } },
       { $sort: { earnings: -1 } }
     ]);
     const results = [];
@@ -2646,48 +2647,16 @@ exports.verifyDelivery = async (req, res) => {
     await order.save();
     let settlementPayload = null;
     try {
-      const riderEarningSvc = require('../services/riderEarningsService');
-      const RiderWallet = require('../models/RiderWallet');
-      const RestaurantWallet = require('../models/RestaurantWallet');
-      const PaymentTransaction = require('../models/PaymentTransaction');
-
-      const earningsResult = await riderEarningSvc.creditRiderEarnings(order._id);
-
-      if (order.restaurantEarning > 0) {
-        await RestaurantWallet.findOneAndUpdate(
-          { restaurant: order.restaurant },
-          { $inc: { balance: order.restaurantEarning, totalEarnings: order.restaurantEarning } },
-          { upsert: true, new: true }
-        );
-        await PaymentTransaction.create({
-          order: order._id,
-          restaurant: order.restaurant,
-          type: 'restaurant_commission',
-          amount: order.restaurantEarning,
-          status: 'completed',
-          note: `Restaurant earning for order #${order.orderNumber || order._id}`,
-        });
-      }
-
-      const [riderWallet, restaurantWallet] = await Promise.all([
-        RiderWallet.findOne({ rider: riderProfile._id }).lean(),
-        RestaurantWallet.findOne({ restaurant: order.restaurant }).lean(),
-      ]);
+      const { processSettlement } = require('../services/settlementService');
+      const settlementResult = await processSettlement(order._id, { trigger: 'riderController.verifyDelivery' });
 
       settlementPayload = {
         orderId: order._id,
-        status: earningsResult?.alreadyProcessed ? 'already_processed' : 'processed',
+        status: settlementResult?.alreadyProcessed ? 'already_processed' : 'processed',
         paymentMethod: order.paymentMethod,
-        rider: riderWallet ? {
-          availableBalance: Number((riderWallet.availableBalance || 0).toFixed(2)),
-          totalEarnings: Number((riderWallet.totalEarnings || 0).toFixed(2)),
-        } : null,
-        restaurant: restaurantWallet ? {
-          balance: Number((restaurantWallet.balance || 0).toFixed(2)),
-          totalEarnings: Number((restaurantWallet.totalEarnings || 0).toFixed(2)),
-          pendingAmount: Number((restaurantWallet.pendingAmount || 0).toFixed(2)),
-        } : null,
-        breakdown: earningsResult?.breakdown || null,
+        rider: settlementResult?.rider || null,
+        restaurant: settlementResult?.restaurant || null,
+        admin: settlementResult?.admin || null,
         timestamp: new Date(),
       };
 
@@ -3055,9 +3024,7 @@ exports.getAvailableOrders = async (req, res) => {
           coordinates: customerCoords,
           type: "Point"
         },
-        earning: typeof o.riderEarning === 'number'
-          ? o.riderEarning
-          : (o.riderCommission || 0) + (o.tip || 0),
+        earning: Number(o?.riderEarnings?.totalRiderEarning || o.riderEarning || 0),
         tip: o.tip || 0,
         totalAmount: o.totalAmount,
         status: o.status,
@@ -3574,9 +3541,9 @@ exports.getMyActiveOrder = async (req, res) => {
           deliveryAddress: order.deliveryAddress
         },
         earnings: {
-          riderEarning: order.riderEarning || 0,
+          riderEarning: order.riderEarnings?.totalRiderEarning || 0,
           tip: order.tip || 0,
-          total: (order.riderEarning || 0) + (order.tip || 0)
+          total: (order.riderEarnings?.totalRiderEarning || 0) + (order.tip || 0)
         },
         customerBill,
         timeline: order.timeline,

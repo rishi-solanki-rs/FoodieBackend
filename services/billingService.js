@@ -82,7 +82,7 @@ async function generateBills(orderId) {
   const rawGstOnFood       = r2(pb.gstOnFood           ?? 0);
   const packagingCharge    = r2(pb.packagingCharge      ?? order.packaging    ?? 0);
   const rawPackagingGst    = r2(pb.packagingGST         ?? 0);
-  const platformFee        = r2(order.platformFee       ?? 0);
+  const platformFee        = r2(pb.taxablePlatformAmount ?? order.platformFee ?? 0);
   const deliveryCharge     = r2(order.deliveryFee       ?? 0);
   const tip                = r2(order.tip               ?? 0);
 
@@ -98,11 +98,12 @@ async function generateBills(orderId) {
     }
     return 0;
   })();
-  const restaurantNetEarning   = r2(order.restaurantCommission ?? 0);
-  const riderTotalEarning      = r2(order.riderEarning         ?? 0);
-  const riderIncentive         = r2(order.riderIncentive       ?? 0);
-  const riderIncentivePct      = r2(order.riderIncentivePercent ?? 0);
-  const cashCollected          = r2(order.cashCollected        ?? 0);
+  const restaurantNetEarning   = r2(order.restaurantEarning ?? pb.restaurantNet ?? 0);
+  const riderDeliveryCharge    = r2(order.riderEarnings?.deliveryCharge ?? 0);
+  const riderPlatformFeeCredit = r2(order.riderEarnings?.platformFee ?? 0);
+  const riderIncentive         = r2(order.riderEarnings?.incentive ?? 0);
+  const riderIncentivePct      = r2(order.riderEarnings?.incentivePercentAtCompletion ?? 0);
+  const riderTotalEarning      = r2(order.riderEarnings?.totalRiderEarning ?? 0);
 
   // ── 3. Compute GST breakdowns ──────────────────────────────────────────────
 
@@ -111,7 +112,7 @@ async function generateBills(orderId) {
     percent: rawGstOnFood > 0 && itemsTotal > 0
       ? r2((rawGstOnFood / itemsTotal) * 100)
       : 0,
-    base:  r2(itemsTotal - discountTotal),
+    base:  r2(itemsTotal - restaurantDiscount),
     total: rawGstOnFood,
     cgst:  r2(rawGstOnFood / 2),
     sgst:  r2(rawGstOnFood / 2),
@@ -129,7 +130,13 @@ async function generateBills(orderId) {
   };
 
   // Platform fee GST (18% by default, admin-configurable)
-  const gstOnPlatform = makeGstBlock(platformFee, gstRates.platformFeeGstPercent);
+  const gstOnPlatform = {
+    percent: r2(pb.gstPercentOnPlatform ?? gstRates.platformFeeGstPercent),
+    base: r2(pb.taxablePlatformAmount ?? platformFee),
+    total: r2(pb.gstOnPlatform ?? 0),
+    cgst: r2(pb.cgstPlatform ?? ((pb.gstOnPlatform || 0) / 2)),
+    sgst: r2(pb.sgstPlatform ?? ((pb.gstOnPlatform || 0) / 2)),
+  };
 
   // Delivery charge GST (18% by default, admin-configurable)
   const gstOnDelivery = makeGstBlock(deliveryCharge, gstRates.deliveryChargeGstPercent);
@@ -151,9 +158,6 @@ async function generateBills(orderId) {
   };
 
   const finalPayableAmount = r2(order.totalAmount ?? 0);
-
-  // Rider delivery charge = total earning minus incentive and tip
-  const riderDeliveryCharge = r2(riderTotalEarning - riderIncentive - tip);
 
   // ── 4. Create bills ────────────────────────────────────────────────────────
   const billPromises = [];
@@ -213,13 +217,12 @@ async function generateBills(orderId) {
         restaurant:         order.restaurant,
         customer:           order.customer,
         deliveryCharge:     Math.max(0, riderDeliveryCharge),
-        platformFeeCredit:  0, // Currently no platform-fee share goes to rider; extend here if needed
+        platformFeeCredit:  Math.max(0, riderPlatformFeeCredit),
         incentive:          riderIncentive,
         incentivePercent:   riderIncentivePct,
         tip,
-        riderTotalEarning,
+        riderTotalEarning:  r2(riderTotalEarning),
         paymentMethod:      order.paymentMethod,
-        cashCollected,
         generatedAt:        new Date(),
       }),
     );

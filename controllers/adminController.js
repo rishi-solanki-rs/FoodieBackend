@@ -90,28 +90,11 @@ exports.getDashboard = async (req, res) => {
     const commissionAgg = await Order.aggregate([
       { $match: { status: { $ne: "cancelled" } } },
       {
-        $lookup: {
-          from: "restaurants",
-          localField: "restaurant",
-          foreignField: "_id",
-          as: "restaurant",
+        $group: {
+          _id: null,
+          totalCommission: { $sum: { $ifNull: ["$adminCommission", 0] } },
         },
       },
-      { $unwind: { path: "$restaurant", preserveNullAndEmptyArrays: true } },
-      {
-        $project: {
-          totalAmount: { $ifNull: ["$totalAmount", 0] },
-          adminCommission: { $ifNull: ["$restaurant.adminCommission", 0] },
-        },
-      },
-      {
-        $project: {
-          commission: {
-            $multiply: ["$totalAmount", { $divide: ["$adminCommission", 100] }],
-          },
-        },
-      },
-      { $group: { _id: null, totalCommission: { $sum: "$commission" } } },
     ]);
     const totalCommission = commissionAgg[0]
       ? commissionAgg[0].totalCommission
@@ -1325,27 +1308,9 @@ exports.getCommissionReport = async (req, res) => {
     const agg = await Order.aggregate([
       { $match: match },
       {
-        $lookup: {
-          from: "restaurants",
-          localField: "restaurant",
-          foreignField: "_id",
-          as: "restaurant",
-        },
-      },
-      { $unwind: { path: "$restaurant", preserveNullAndEmptyArrays: true } },
-      {
         $project: {
           amount: { $ifNull: ["$totalAmount", 0] },
-          commissionRate: { $ifNull: ["$restaurant.adminCommission", 0] },
-          createdAt: 1,
-        },
-      },
-      {
-        $project: {
-          commission: {
-            $multiply: ["$amount", { $divide: ["$commissionRate", 100] }],
-          },
-          amount: 1,
+          commission: { $ifNull: ["$adminCommission", 0] },
           createdAt: 1,
         },
       },

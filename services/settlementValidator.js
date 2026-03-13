@@ -7,12 +7,9 @@
  * after settlement has been processed. Intended for use in reconciliation
  * scripts and audit tooling — NOT called in the hot payment path.
  *
- * Formula reference (settlement-v2):
- *   restaurantGross  = itemTotal + packagingCharge
- *   adminCommission  = restaurantGross × commissionPercent / 100
- *   restaurantNet    = restaurantGross − adminCommission
- *   riderEarning     = deliveryFee + riderPlatformFeeShare + riderIncentive
- *   riderTotalCredit = riderEarning + tip
+ * Formula reference (canonical):
+ *   restaurantNet    = itemTotal − adminCommission − gstOnFood − adminCommissionGst
+ *   riderEarning     = deliveryCharge + platformFee + incentive
  */
 
 const Order = require('../models/Order');
@@ -53,31 +50,22 @@ async function validateSettlement(orderId) {
 
   // ── Source values ──────────────────────────────────────────────────────────
   const itemTotal = Number(pb.itemTotal || order.itemTotal || 0);
-  const packagingCharge = Number(pb.packagingCharge || order.packaging || 0);
-  const commissionPercent = Number(order.restaurant?.adminCommission || 10);
-  const deliveryFee = Number(order.deliveryFee || 0);
-  const tipAmount = Number(order.tip || 0);
-  const platformFee = Number(order.platformFee || 0);
+  const gstOnFood = Number(pb.gstOnFood || 0);
+  const adminCommission = Number(order.adminCommission || 0);
+  const adminCommissionGst = Number(pb.adminCommissionGst || 0);
+
+  const deliveryCharge = Number(order.riderEarnings?.deliveryCharge || 0);
+  const platformFee = Number(order.riderEarnings?.platformFee || 0);
+  const riderIncentive = Number(order.riderEarnings?.incentive || 0);
 
   // ── Expected values ────────────────────────────────────────────────────────
-  const expectedRestaurantGross = Math.round((itemTotal + packagingCharge) * 100) / 100;
-  const expectedAdminCommission = Math.round((expectedRestaurantGross * commissionPercent / 100) * 100) / 100;
-  const expectedRestaurantNet = Math.max(0, Math.round((expectedRestaurantGross - expectedAdminCommission) * 100) / 100);
-
-  // riderIncentive — prefer structured object, fallback to legacy field
-  const storedRiderIncentive = Number(
-    order.riderEarnings?.incentive ??
-    order.riderIncentive ??
-    0
-  );
-
-  const expectedRiderEarning = Math.max(0, Math.round((deliveryFee + platformFee + storedRiderIncentive) * 100) / 100);
-  const expectedRiderTotalCredit = Math.round((expectedRiderEarning + tipAmount) * 100) / 100;
+  const expectedRestaurantNet = Math.max(0, Math.round((itemTotal - adminCommission - gstOnFood - adminCommissionGst) * 100) / 100);
+  const expectedRiderEarning = Math.max(0, Math.round((deliveryCharge + platformFee + riderIncentive) * 100) / 100);
 
   // ── Stored values ──────────────────────────────────────────────────────────
-  const storedRestaurantNet = Number(order.restaurantEarning ?? order.restaurantCommission ?? 0);
-  const storedAdminCommission = Number(order.adminCommissionAtOrder ?? order.adminCommission ?? 0);
-  const storedRiderTotalCredit = Number(order.riderEarnings?.totalRiderEarning ?? order.riderEarning ?? 0);
+  const storedRestaurantNet = Number(order.restaurantEarning || 0);
+  const storedAdminCommission = Number(order.adminCommission || 0);
+  const storedRiderBaseEarning = Number(order.riderEarnings?.totalRiderEarning || 0);
 
   // ── Checks ─────────────────────────────────────────────────────────────────
 
@@ -85,67 +73,45 @@ async function validateSettlement(orderId) {
   if (!nearlyEqual(storedRestaurantNet, expectedRestaurantNet)) {
     issues.push(
       `restaurantNet mismatch: stored=${storedRestaurantNet.toFixed(2)}, expected=${expectedRestaurantNet.toFixed(2)} ` +
-      `(itemTotal=${itemTotal}, packaging=${packagingCharge}, commission%=${commissionPercent})`
+      `(itemTotal=${itemTotal}, adminCommission=${adminCommission}, gstOnFood=${gstOnFood}, adminCommissionGst=${adminCommissionGst})`
     );
   }
 
-  // 2. Admin commission
-  if (!nearlyEqual(storedAdminCommission, expectedAdminCommission)) {
-    issues.push(
-      `adminCommission mismatch: stored=${storedAdminCommission.toFixed(2)}, expected=${expectedAdminCommission.toFixed(2)}`
-    );
-  }
-
-  // 3. Rider earning (excluding tip)
-  const storedRiderBaseEarning = Number(order.riderEarnings?.totalRiderEarning ?? order.riderEarning ?? 0);
+  // 2. Rider earning
   if (!nearlyEqual(storedRiderBaseEarning, expectedRiderEarning)) {
     issues.push(
       `riderEarning (base) mismatch: stored=${storedRiderBaseEarning.toFixed(2)}, ` +
       `expected=${expectedRiderEarning.toFixed(2)} ` +
-      `(deliveryFee=${deliveryFee}, platformFee=${platformFee}, incentive=${storedRiderIncentive})`
+      `(deliveryCharge=${deliveryCharge}, platformFee=${platformFee}, incentive=${riderIncentive})`
     );
   }
 
-  // 4. Consistency: restaurantNet + adminCommission should equal restaurantGross
-  const netPlusCommission = Math.round((storedRestaurantNet + storedAdminCommission) * 100) / 100;
-  if (!nearlyEqual(netPlusCommission, expectedRestaurantGross)) {
+  // 3. Consistency: paymentBreakdown.restaurantNet must match order.restaurantEarning
+  const pbRestaurantNet = Number(order.paymentBreakdown?.restaurantNet ?? storedRestaurantNet);
+  if (!nearlyEqual(pbRestaurantNet, storedRestaurantNet)) {
     issues.push(
-      `restaurantGross split inconsistency: restaurantNet(${storedRestaurantNet}) + adminCommission(${storedAdminCommission}) ` +
-      `= ${netPlusCommission.toFixed(2)}, expected gross=${expectedRestaurantGross.toFixed(2)}`
+      `paymentBreakdown.restaurantNet mismatch: pb=${pbRestaurantNet.toFixed(2)}, order=${storedRestaurantNet.toFixed(2)}`
     );
   }
 
-  // 5. Item-level commission aggregation (if items have itemCommissionRate)
-  if (Array.isArray(order.items) && order.items.length > 0) {
-    let itemLevelTotal = 0;
-    for (const item of order.items) {
-      if (item.itemCommissionRate != null) {
-        const itemSubtotal = Number(item.price || 0) * Number(item.quantity || 1);
-        itemLevelTotal += Math.round((itemSubtotal * Number(item.itemCommissionRate) / 100) * 100) / 100;
-      }
-    }
-    if (itemLevelTotal > 0 && !nearlyEqual(itemLevelTotal, storedAdminCommission)) {
-      issues.push(
-        `item-level commission sum (${itemLevelTotal.toFixed(2)}) does not match ` +
-        `stored adminCommission (${storedAdminCommission.toFixed(2)}). ` +
-        `Consider using order-level commissionPercent (${commissionPercent}%) instead.`
-      );
-    }
+  // 4. Item-level aggregation should match order.restaurantEarning
+  const itemRestaurantSum = Array.isArray(order.items)
+    ? Math.round(order.items.reduce((sum, item) => sum + (Number(item.restaurantEarningAmount || 0)), 0) * 100) / 100
+    : 0;
+  if (itemRestaurantSum > 0 && !nearlyEqual(itemRestaurantSum, storedRestaurantNet)) {
+    issues.push(`item restaurant earning sum mismatch: items=${itemRestaurantSum.toFixed(2)}, order=${storedRestaurantNet.toFixed(2)}`);
   }
 
   const snapshot = {
     itemTotal,
-    packagingCharge,
-    restaurantGross: expectedRestaurantGross,
-    commissionPercent,
-    expectedAdminCommission,
+    gstOnFood,
+    adminCommission,
+    adminCommissionGst,
     expectedRestaurantNet,
-    deliveryFee,
+    deliveryCharge,
     platformFee,
-    storedRiderIncentive,
-    tipAmount,
+    riderIncentive,
     expectedRiderEarning,
-    expectedRiderTotalCredit,
     storedRestaurantNet,
     storedAdminCommission,
     storedRiderBaseEarning,

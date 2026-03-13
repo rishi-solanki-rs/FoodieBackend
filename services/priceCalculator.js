@@ -42,6 +42,7 @@ async function getAdminSettings() {
     smallCartThreshold: settings?.smallCartThreshold ?? 0,
     smallCartFee: settings?.smallCartFee ?? 0,
     deliverySlabs: {
+      baseDeliveryFee: settings?.deliverySlabs?.baseDeliveryFee ?? 0,
       firstSlabMaxKm: settings?.deliverySlabs?.firstSlabMaxKm ?? 5,
       firstSlabRatePerKm: settings?.deliverySlabs?.firstSlabRatePerKm ?? 3,
       secondSlabMaxKm: settings?.deliverySlabs?.secondSlabMaxKm ?? 10,
@@ -70,20 +71,21 @@ function computeDeliveryFee(distanceKm, slabs) {
 
   const { firstSlabMaxKm, firstSlabRatePerKm,
     secondSlabMaxKm, secondSlabRatePerKm,
-    thirdSlabRatePerKm } = slabs;
+    thirdSlabRatePerKm,
+    baseDeliveryFee = 0 } = slabs;
 
-  let fee = 0;
+  let fee = Number(baseDeliveryFee) || 0;
 
   if (distanceKm <= firstSlabMaxKm) {
     // Entirely in first slab
-    fee = distanceKm * firstSlabRatePerKm;
+    fee += distanceKm * firstSlabRatePerKm;
   } else if (distanceKm <= secondSlabMaxKm) {
     // First slab fully consumed + remainder in second slab
-    fee = (firstSlabMaxKm * firstSlabRatePerKm)
+    fee += (firstSlabMaxKm * firstSlabRatePerKm)
       + ((distanceKm - firstSlabMaxKm) * secondSlabRatePerKm);
   } else {
     // All three slabs
-    fee = (firstSlabMaxKm * firstSlabRatePerKm)
+    fee += (firstSlabMaxKm * firstSlabRatePerKm)
       + ((secondSlabMaxKm - firstSlabMaxKm) * secondSlabRatePerKm)
       + ((distanceKm - secondSlabMaxKm) * thirdSlabRatePerKm);
   }
@@ -170,10 +172,23 @@ async function calculateOrderPrice({
     const discount = round(couponResult.discount);
     const finalDeliveryFee = couponResult.freeDelivery ? 0 : deliveryFee;
 
+    // Guardrail: avoid unintended zero delivery fee for positive-distance non-free deliveries.
+    const safeDeliveryFee = (() => {
+      if (couponResult.freeDelivery) return 0;
+      if (restaurant.isFreeDelivery) return finalDeliveryFee;
+      if ((Number(deliveryDistance) || 0) > 0 && (Number(finalDeliveryFee) || 0) <= 0) {
+        const fallback = round((adminSettings.deliverySlabs?.baseDeliveryFee || 0) + (adminSettings.deliverySlabs?.firstSlabRatePerKm || 0));
+        return Math.max(0, fallback);
+      }
+      return round(finalDeliveryFee);
+    })();
+
     // 6. Canonical restaurant billing + platform settlement breakdown
     const effectiveFoodGstPercent = itemTotal > 0 ? round((gstTotal / itemTotal) * 100) : adminSettings.defaultGstPercent;
     const packagingGstPercent = adminSettings.defaultGstPercent;
     const discountGstPercent = adminSettings.defaultGstPercent;
+    const estimatedCommissionPercent = Number(restaurant.adminCommission ?? adminSettings?.payoutConfig?.defaultRestaurantCommissionPercent ?? 0);
+    const estimatedAdminCommission = round(itemTotal * (Math.max(0, estimatedCommissionPercent) / 100));
     const settlement = calculateSettlementBreakdown({
       itemTotal,
       restaurantDiscount: 0,
@@ -183,9 +198,11 @@ async function calculateOrderPrice({
       foodierDiscount: discount,
       discountGstPercent,
       // Pass platform bill so settlement can apply platform-first discount distribution
-      deliveryFee: finalDeliveryFee,
+      deliveryFee: safeDeliveryFee,
       platformFee,
       platformGstPercent: adminSettings.platformFeeGstPercent, // 18% GST on platform fee + delivery (service tax)
+      adminCommissionAmount: estimatedAdminCommission,
+      adminCommissionGstPercent: adminSettings.adminCommissionGstPercent,
     });
 
     const gstTotalForOrder = round(settlement.gstOnFood + settlement.packagingGST);
@@ -213,7 +230,7 @@ async function calculateOrderPrice({
         packaging,
         packagingGST: settlement.packagingGST,
         restaurantBillTotal: settlement.restaurantBillTotal,
-        deliveryFee: round(finalDeliveryFee),
+        deliveryFee: safeDeliveryFee,
         platformFee,
         smallCartFee,
         discount,
@@ -229,7 +246,7 @@ async function calculateOrderPrice({
         taxRate: null,
         surgeFee: 0,
         surgeMultiplier: 1,
-        subtotal: round(settlement.restaurantBillTotal + finalDeliveryFee + platformFee),
+        subtotal: round(settlement.restaurantBillTotal + safeDeliveryFee + platformFee),
       },
       coupon: {
         code: couponCode || null,

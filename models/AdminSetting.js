@@ -38,6 +38,7 @@ const AdminSettingSchema = new mongoose.Schema(
 
     // ─── Delivery Charge Slabs (₹ per km) ────────────────────────────────────
     deliverySlabs: {
+      baseDeliveryFee: { type: Number, default: 0, min: 0 }, // flat base charge per order
       firstSlabMaxKm: { type: Number, default: 5 }, //  0 – 5 km
       firstSlabRatePerKm: { type: Number, default: 3 },
       secondSlabMaxKm: { type: Number, default: 10 }, //  5 – 10 km

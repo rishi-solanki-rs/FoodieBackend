@@ -18,20 +18,11 @@ exports.getOverview = async (req, res) => {
           totalEarnings: { $sum: { $ifNull: ["$totalAmount", 0] } },
           totalCommission: { $sum: { $ifNull: ["$adminCommission", 0] } },
           totalRestaurantCommission: {
-            $sum: { $ifNull: ["$restaurantCommission", 0] },
+            $sum: { $ifNull: ["$restaurantEarning", 0] },
           },
           totalDeliveryCommission: {
             $sum: {
-              $add: [
-                { $ifNull: ["$riderEarning", 0] },
-                {
-                  $cond: [
-                    { $gt: ["$riderEarning", 0] },
-                    0,
-                    { $add: [{ $ifNull: ["$riderCommission", 0] }, { $ifNull: ["$tip", 0] }] },
-                  ],
-                },
-              ],
+              $ifNull: ["$riderEarnings.totalRiderEarning", 0],
             },
           },
         },

@@ -24,6 +24,9 @@ const {
   canBeCancelled,
 } = require("../utils/orderStateValidator");
 const { calculateOrderPrice } = require("../services/priceCalculator");
+const { calculateSettlementBreakdown } = require('../services/settlementCalculator');
+const { validateOrderFinancialIntegrity } = require('../services/financialIntegrityService');
+const { processSettlement } = require('../services/settlementService');
 const {
   logger,
   logOrderTransition,
@@ -269,7 +272,13 @@ exports.placeOrder = async (req, res) => {
       products.map((p) => [p._id.toString(), typeof p.gstPercent === 'number' ? p.gstPercent : null])
     );
 
+    const adminSettings = await AdminSetting.findOne().lean();
+    const payoutConfig = adminSettings?.payoutConfig || {};
+    const incentivePercent = payoutConfig.riderIncentivePercent ?? 5;
+    const adminCommissionGstPercent = adminSettings?.adminCommissionGstPercent ?? 18;
+
     let adminCommission = 0;
+    let adminCommissionGstTotal = 0;
     let restaurantEarningSum = 0;
     const orderItems = cart.items.map((item) => {
       // item.price from cart = basePrice + variation.price + Σ addOns.price (set by cartController)
@@ -281,15 +290,21 @@ exports.placeOrder = async (req, res) => {
         ? productCommission
         : (Number(restaurant.adminCommission) || 0);
       const itemAdminCommission = Math.round(lineTotal * (commissionPercent / 100) * 100) / 100;
-      const itemRestaurantEarning = Math.round((lineTotal - itemAdminCommission) * 100) / 100;
-      adminCommission += itemAdminCommission;
-      restaurantEarningSum += itemRestaurantEarning;
+      const itemAdminCommissionGst = Math.round(itemAdminCommission * (adminCommissionGstPercent / 100) * 100) / 100;
 
       // Per-item GST breakdown for invoice
       const itemGstPercent = productGstMap.get(String(item.product)) ?? (item.gstPercent || 0);
       const itemGstAmount = Math.round(lineTotal * (itemGstPercent / 100) * 100) / 100;
       const itemCgst = Math.round(itemGstAmount / 2 * 100) / 100;
       const itemSgst = Math.round((itemGstAmount - itemCgst) * 100) / 100;
+      const itemRestaurantEarning = Math.max(
+        0,
+        Math.round((lineTotal - itemAdminCommission - itemGstAmount - itemAdminCommissionGst) * 100) / 100,
+      );
+
+      adminCommission += itemAdminCommission;
+      adminCommissionGstTotal += itemAdminCommissionGst;
+      restaurantEarningSum += itemRestaurantEarning;
 
       return {
         product: item.product,
@@ -310,27 +325,31 @@ exports.placeOrder = async (req, res) => {
       };
     });
     adminCommission = Math.round(adminCommission * 100) / 100;
+    adminCommissionGstTotal = Math.round(adminCommissionGstTotal * 100) / 100;
     restaurantEarningSum = Math.round(restaurantEarningSum * 100) / 100;
 
-    // ── Restaurant Net Earning ────────────────────────────────────────────────
-    // Formula: Σ items[].restaurantEarningAmount  (= itemTotal − adminCommission)
-    // Packaging is tracked separately in paymentBreakdown and goes to the restaurant
-    // in full; it is not subject to commission.
-    // GST, deliveryFee, and platformFee are NOT part of restaurant earnings.
-    // Load admin settings now — needed for both commission GST and rider incentive percent.
-    const adminSettings = await AdminSetting.findOne().lean();
-    const payoutConfig = adminSettings?.payoutConfig || {};
-    const incentivePercent = payoutConfig.riderIncentivePercent ?? 5;
+    const canonicalSettlement = calculateSettlementBreakdown({
+      itemTotal: bill.itemTotal || 0,
+      restaurantDiscount: bill.restaurantDiscount || 0,
+      foodGstPercent: bill.itemTotal > 0 ? ((bill.gstOnFood || 0) / bill.itemTotal) * 100 : 0,
+      packagingCharge: bill.packaging || 0,
+      packagingGstPercent: (bill.packaging || 0) > 0 ? ((bill.packagingGST || 0) / bill.packaging) * 100 : 0,
+      foodierDiscount: bill.foodierDiscount || bill.discount || 0,
+      discountGstPercent: adminSettings?.defaultGstPercent ?? 5,
+      deliveryFee: bill.deliveryFee || 0,
+      platformFee: bill.platformFee || 0,
+      platformGstPercent: adminSettings?.platformFeeGstPercent ?? 18,
+      adminCommissionAmount: adminCommission,
+      adminCommissionGstPercent,
+    });
 
-    // 18% GST on admin commission is billed to the restaurant (not the customer).
-    // Restaurant net earning is reduced by this; admin wallet receives commission + its GST.
-    const adminCommissionGstPercent = adminSettings?.adminCommissionGstPercent ?? 18;
-    const adminCommissionGst = Math.round(adminCommission * (adminCommissionGstPercent / 100) * 100) / 100;
-    const totalAdminCommissionDeduction = Math.round((adminCommission + adminCommissionGst) * 100) / 100;
-
-    const restaurantGross = Math.round(((bill.itemTotal || 0) + (bill.packaging || 0)) * 100) / 100;
-    // Restaurant keeps item earnings minus full admin deduction (base commission + GST on commission)
-    const restaurantNet = Math.max(0, restaurantEarningSum - adminCommissionGst);
+    // Canonical restaurant earning is item-based and must match item aggregation.
+    canonicalSettlement.adminCommissionGst = adminCommissionGstTotal;
+    canonicalSettlement.restaurantNet = restaurantEarningSum;
+    canonicalSettlement.restaurantNetEarning = restaurantEarningSum;
+    canonicalSettlement.customerRestaurantBill = canonicalSettlement.finalPayableToRestaurant;
+    canonicalSettlement.restaurantGross = Math.round((bill.itemTotal || 0) * 100) / 100;
+    canonicalSettlement.totalAdminCommissionDeduction = Math.round((adminCommission + adminCommissionGstTotal) * 100) / 100;
 
     // ── Rider Earnings ───────────────────────────────────────────────────────
     // Rider receives: deliveryFee (pre-GST) + platformFee (pre-GST) + incentive.
@@ -341,7 +360,7 @@ exports.placeOrder = async (req, res) => {
     // Rider receives the pre-GST platform fee; the 18% GST portion goes to admin wallet.
     const riderPlatformFeeShare = Math.round((bill.platformFee || 0) * 100) / 100;
     // Admin's platform GST earning = 18% on (deliveryFee + platformFee) combined
-    const adminPlatformFeeShare = Math.round((bill.paymentBreakdown?.gstOnPlatform || 0) * 100) / 100;
+    const adminPlatformFeeShare = Math.round((canonicalSettlement.gstOnPlatform || 0) * 100) / 100;
     // Incentive: % of item subtotal (before GST/fees)
     const riderIncentiveAmount = Math.max(0, Math.round((bill.itemTotal * (incentivePercent / 100)) * 100) / 100);
 
@@ -362,7 +381,7 @@ exports.placeOrder = async (req, res) => {
     // restaurantNetEarning   = what the restaurant actually keeps after admin commission
     //   (= Σ items[].restaurantEarningAmount = itemTotal − adminCommission)
     // These are two different quantities and must never overwrite each other.
-    const customerRestaurantBill = Math.round(((bill.finalPayableToRestaurant) || 0) * 100) / 100;
+    const customerRestaurantBill = Math.round(((canonicalSettlement.finalPayableToRestaurant) || 0) * 100) / 100;
 
     const orderDoc = {
       customer: user._id,
@@ -384,35 +403,23 @@ exports.placeOrder = async (req, res) => {
       couponCode: bill.appliedCoupon,
       totalAmount: bill.toPay,
       paymentBreakdown: {
-        ...(bill.paymentBreakdown || {}),
-        itemTotal: bill.itemTotal,
-        restaurantDiscount: bill.restaurantDiscount || 0,
-        gstOnFood: bill.gstOnFood || 0,
-        packagingCharge: bill.packaging || 0,
-        packagingGST: bill.packagingGST || 0,
-        restaurantBillTotal: bill.restaurantBillTotal || 0,
-        foodierDiscount: bill.foodierDiscount || bill.discount || 0,
-        gstOnDiscount: bill.gstOnDiscount || 0,
-        // Customer-facing: what customer pays toward restaurant bill (from settlement calculator)
+        ...canonicalSettlement,
         finalPayableToRestaurant: customerRestaurantBill,
         customerRestaurantBill,
-        // Restaurant-facing: what restaurant keeps after admin commission deduction
-        restaurantNetEarning: restaurantNet,
-        // Audit trail fields
-        restaurantGross,
-        restaurantNet,
-        adminCommissionGst,
+        restaurantNet: restaurantEarningSum,
+        restaurantNetEarning: restaurantEarningSum,
+        adminCommissionGst: adminCommissionGstTotal,
         adminCommissionGstPercent,
-        totalAdminCommissionDeduction,
+        totalAdminCommissionDeduction: Math.round((adminCommission + adminCommissionGstTotal) * 100) / 100,
         riderDeliveryEarning: riderEarningsData.deliveryCharge,
         riderIncentive: riderIncentiveAmount,
         riderPlatformFeeShare,
-        adminPlatformFeeShare,  // = gstOnPlatform (18% GST on delivery+platform fee)
+        adminPlatformFeeShare,
         computedVersion: "settlement-v2",
         computedAt: new Date(),
       },
       // Canonical settlement fields (single source of truth)
-      restaurantEarning: restaurantNet,
+      restaurantEarning: restaurantEarningSum,
       adminCommission,
       // Structured rider earnings (single source of truth)
       riderEarnings: riderEarningsData,
@@ -431,6 +438,11 @@ exports.placeOrder = async (req, res) => {
         description: initialStatusDesc
       }],
     };
+
+    const integrityResult = validateOrderFinancialIntegrity(orderDoc);
+    if (!integrityResult.valid) {
+      return sendError(res, 400, 'Financial integrity validation failed', integrityResult.issues);
+    }
     const newOrder = await Order.create(orderDoc);
     // Record wallet transaction after order is created so orderId can be linked
     if (paymentMethod === "wallet") {
@@ -715,7 +727,7 @@ exports.getOrderDetailsRestaurant = async (req, res) => {
           tip: orderObj.tip,
           discount: orderObj.discount,
           totalAmount: orderObj.totalAmount,
-          restaurantEarning: orderObj.restaurantCommission || 0,
+          restaurantEarning: orderObj.restaurantEarning || 0,
         },
         payment: {
           method: orderObj.paymentMethod,
@@ -807,7 +819,7 @@ exports.getOrderDetailsRider = async (req, res) => {
           deliveryFee: orderObj.deliveryFee,
           tip: orderObj.tip,
           totalAmount: orderObj.totalAmount,
-          riderEarning: (orderObj.riderEarning || 0) + (orderObj.tip || 0),
+          riderEarning: (orderObj.riderEarnings?.totalRiderEarning || 0) + (orderObj.tip || 0),
         },
         payment: {
           method: orderObj.paymentMethod,
@@ -1495,52 +1507,15 @@ exports.updateOrderStatus = async (req, res) => {
         { new: true },
       );
       try {
-        const riderEarningsSvc = require('../services/riderEarningsService');
-        const RiderWallet = require('../models/RiderWallet');
-        const RestaurantWallet = require('../models/RestaurantWallet');
-        const PaymentTransaction = require('../models/PaymentTransaction');
-        // Credit rider earnings using snapshot stored at order creation
-        await riderEarningsSvc.creditRiderEarnings(order._id);
-        // Credit restaurant wallet
-        let restaurantWallet = await RestaurantWallet.findOne({ restaurant: order.restaurant });
-        if (!restaurantWallet) {
-          restaurantWallet = await RestaurantWallet.create({ restaurant: order.restaurant });
-        }
-        const restaurantNet = order.restaurantEarning || order.restaurantCommission || 0;
-        if (restaurantNet > 0) {
-          restaurantWallet.balance = (restaurantWallet.balance || 0) + restaurantNet;
-          restaurantWallet.totalEarnings = (restaurantWallet.totalEarnings || 0) + restaurantNet;
-          restaurantWallet.pendingAmount = (restaurantWallet.pendingAmount || 0) + restaurantNet;
-          await restaurantWallet.save();
-        }
-        // Audit record for restaurant earning
-        await PaymentTransaction.create({
-          order: order._id,
-          restaurant: order.restaurant,
-          user: order.customer,
-          type: 'restaurant_commission',
-          amount: restaurantNet,
-          status: 'completed',
-          note: `Restaurant earning credited for order #${order._id.toString().slice(-6)}`,
-        });
+        const settlementResult = await processSettlement(order._id, { trigger: 'orderController.updateOrderStatus' });
         if (order.rider) {
-          const [riderWallet, updatedRestaurantWallet] = await Promise.all([
-            RiderWallet.findOne({ rider: order.rider }).lean(),
-            RestaurantWallet.findOne({ restaurant: order.restaurant }).lean(),
-          ]);
           const settlementPayload = {
             orderId: order._id,
-            status: 'processed',
+            status: settlementResult?.alreadyProcessed ? 'already_processed' : 'processed',
             paymentMethod: order.paymentMethod,
-            rider: riderWallet ? {
-              availableBalance: Number((riderWallet.availableBalance || 0).toFixed(2)),
-              totalEarnings: Number((riderWallet.totalEarnings || 0).toFixed(2)),
-            } : null,
-            restaurant: updatedRestaurantWallet ? {
-              balance: Number((updatedRestaurantWallet.balance || 0).toFixed(2)),
-              totalEarnings: Number((updatedRestaurantWallet.totalEarnings || 0).toFixed(2)),
-              pendingAmount: Number((updatedRestaurantWallet.pendingAmount || 0).toFixed(2)),
-            } : null,
+            rider: settlementResult?.rider || null,
+            restaurant: settlementResult?.restaurant || null,
+            admin: settlementResult?.admin || null,
             timestamp: new Date(),
           };
           socketService.emitToRider(order.rider.toString(), 'rider:earnings_updated', settlementPayload);
@@ -2439,51 +2414,15 @@ exports.adminUpdateStatus = async (req, res) => {
       );
 
       try {
-        const riderEarningsSvc = require('../services/riderEarningsService');
-        const RiderWallet = require('../models/RiderWallet');
-        const RestaurantWallet = require('../models/RestaurantWallet');
-        const PaymentTransaction = require('../models/PaymentTransaction');
-        // Credit rider earnings using snapshot stored at order creation
-        await riderEarningsSvc.creditRiderEarnings(order._id);
-        // Credit restaurant wallet
-        let restaurantWallet = await RestaurantWallet.findOne({ restaurant: order.restaurant });
-        if (!restaurantWallet) {
-          restaurantWallet = await RestaurantWallet.create({ restaurant: order.restaurant });
-        }
-        const restaurantNet = order.restaurantEarning || order.restaurantCommission || 0;
-        if (restaurantNet > 0) {
-          restaurantWallet.balance = (restaurantWallet.balance || 0) + restaurantNet;
-          restaurantWallet.totalEarnings = (restaurantWallet.totalEarnings || 0) + restaurantNet;
-          restaurantWallet.pendingAmount = (restaurantWallet.pendingAmount || 0) + restaurantNet;
-          await restaurantWallet.save();
-        }
-        await PaymentTransaction.create({
-          order: order._id,
-          restaurant: order.restaurant,
-          user: order.customer,
-          type: 'restaurant_commission',
-          amount: restaurantNet,
-          status: 'completed',
-          note: `Restaurant earning credited for order #${order._id.toString().slice(-6)}`,
-        });
+        const settlementResult = await processSettlement(order._id, { trigger: 'orderController.adminUpdateStatus' });
         if (order.rider) {
-          const [riderWallet, updatedRestaurantWallet] = await Promise.all([
-            RiderWallet.findOne({ rider: order.rider }).lean(),
-            RestaurantWallet.findOne({ restaurant: order.restaurant }).lean(),
-          ]);
           const settlementPayload = {
             orderId: order._id,
-            status: 'processed',
+            status: settlementResult?.alreadyProcessed ? 'already_processed' : 'processed',
             paymentMethod: order.paymentMethod,
-            rider: riderWallet ? {
-              availableBalance: Number((riderWallet.availableBalance || 0).toFixed(2)),
-              totalEarnings: Number((riderWallet.totalEarnings || 0).toFixed(2)),
-            } : null,
-            restaurant: updatedRestaurantWallet ? {
-              balance: Number((updatedRestaurantWallet.balance || 0).toFixed(2)),
-              totalEarnings: Number((updatedRestaurantWallet.totalEarnings || 0).toFixed(2)),
-              pendingAmount: Number((updatedRestaurantWallet.pendingAmount || 0).toFixed(2)),
-            } : null,
+            rider: settlementResult?.rider || null,
+            restaurant: settlementResult?.restaurant || null,
+            admin: settlementResult?.admin || null,
             timestamp: new Date(),
           };
           socketService.emitToRider(order.rider.toString(), 'rider:earnings_updated', settlementPayload);

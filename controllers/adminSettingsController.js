@@ -69,6 +69,9 @@ exports.getPricingSettings = async (req, res) => {
       gst: {
         defaultGstPercent: settings.defaultGstPercent ?? 5,
         availableSlabs: [0, 5, 12, 18],
+        platformFeeGstPercent: settings.platformFeeGstPercent ?? 18,
+        deliveryChargeGstPercent: settings.deliveryChargeGstPercent ?? 18,
+        adminCommissionGstPercent: settings.adminCommissionGstPercent ?? 18,
       },
       platformFee: settings.platformFee ?? 9,
       smallCartThreshold: settings.smallCartThreshold ?? 0,
@@ -88,6 +91,9 @@ exports.getPricingSettings = async (req, res) => {
  * Body (all fields optional, only provided fields are updated):
  * {
  *   defaultGstPercent: 5,             // 0 | 5 | 12 | 18
+ *   platformFeeGstPercent: 18,        // 0..28
+ *   deliveryChargeGstPercent: 18,     // 0..28
+ *   adminCommissionGstPercent: 18,    // 0..28
  *   platformFee: 9,
  *   smallCartThreshold: 100,
  *   smallCartFee: 20,
@@ -109,6 +115,9 @@ exports.updatePricingSettings = async (req, res) => {
     const settings = await ensureSettings();
     const {
       defaultGstPercent,
+      platformFeeGstPercent,
+      deliveryChargeGstPercent,
+      adminCommissionGstPercent,
       platformFee,
       smallCartThreshold,
       smallCartFee,
@@ -123,6 +132,32 @@ exports.updatePricingSettings = async (req, res) => {
         return res.status(400).json({ success: false, message: 'defaultGstPercent must be 0, 5, 12, or 18' });
       }
       settings.defaultGstPercent = v;
+    }
+
+    const validateGstPercent = (name, value) => {
+      const v = Number(value);
+      if (!Number.isFinite(v) || v < 0 || v > 28) {
+        return `${name} must be between 0 and 28`;
+      }
+      return null;
+    };
+
+    if (platformFeeGstPercent !== undefined) {
+      const err = validateGstPercent('platformFeeGstPercent', platformFeeGstPercent);
+      if (err) return res.status(400).json({ success: false, message: err });
+      settings.platformFeeGstPercent = Number(platformFeeGstPercent);
+    }
+
+    if (deliveryChargeGstPercent !== undefined) {
+      const err = validateGstPercent('deliveryChargeGstPercent', deliveryChargeGstPercent);
+      if (err) return res.status(400).json({ success: false, message: err });
+      settings.deliveryChargeGstPercent = Number(deliveryChargeGstPercent);
+    }
+
+    if (adminCommissionGstPercent !== undefined) {
+      const err = validateGstPercent('adminCommissionGstPercent', adminCommissionGstPercent);
+      if (err) return res.status(400).json({ success: false, message: err });
+      settings.adminCommissionGstPercent = Number(adminCommissionGstPercent);
     }
 
     // Platform fee
@@ -140,6 +175,7 @@ exports.updatePricingSettings = async (req, res) => {
     if (deliverySlabs && typeof deliverySlabs === 'object') {
       const cur = settings.deliverySlabs || {};
       settings.deliverySlabs = {
+        baseDeliveryFee: Number(deliverySlabs.baseDeliveryFee ?? cur.baseDeliveryFee ?? 0),
         firstSlabMaxKm: Number(deliverySlabs.firstSlabMaxKm ?? cur.firstSlabMaxKm ?? 5),
         firstSlabRatePerKm: Number(deliverySlabs.firstSlabRatePerKm ?? cur.firstSlabRatePerKm ?? 3),
         secondSlabMaxKm: Number(deliverySlabs.secondSlabMaxKm ?? cur.secondSlabMaxKm ?? 10),
@@ -177,6 +213,9 @@ exports.updatePricingSettings = async (req, res) => {
       message: 'Pricing settings updated',
       settings: {
         defaultGstPercent: settings.defaultGstPercent,
+        platformFeeGstPercent: settings.platformFeeGstPercent,
+        deliveryChargeGstPercent: settings.deliveryChargeGstPercent,
+        adminCommissionGstPercent: settings.adminCommissionGstPercent,
         platformFee: settings.platformFee,
         smallCartThreshold: settings.smallCartThreshold,
         smallCartFee: settings.smallCartFee,

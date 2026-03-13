@@ -28,6 +28,9 @@ function calculateSettlementBreakdown({
   deliveryFee = 0,
   platformFee = 0,
   platformGstPercent = 0,
+  // Settlement inputs
+  adminCommissionAmount = 0,
+  adminCommissionGstPercent = 18,
 }) {
   // ── Restaurant bill section ─────────────────────────────────────────────────
   const safeItemTotal = round(Math.max(0, itemTotal));
@@ -72,6 +75,21 @@ function calculateSettlementBreakdown({
   const sgstPlatform = round(gstOnPlatform - cgstPlatform);
   const platformBillTotal = round(taxablePlatformAmount + gstOnPlatform);
 
+  // ── Canonical settlement fields ───────────────────────────────────────────
+  // Business rule:
+  // restaurantNet = lineTotal - adminCommission - restaurantGST - adminCommissionGST
+  // (lineTotal at order level maps to taxableAmountFood after restaurant discount)
+  const safeAdminCommissionAmount = round(Math.max(0, adminCommissionAmount));
+  const adminCommissionGst = round(
+    safeAdminCommissionAmount * (Math.max(0, adminCommissionGstPercent) / 100),
+  );
+  const restaurantNet = round(Math.max(
+    0,
+    taxableAmountFood - safeAdminCommissionAmount - gstOnFood - adminCommissionGst,
+  ));
+  const restaurantNetEarning = restaurantNet;
+  const customerRestaurantBill = finalPayableToRestaurant;
+
   return {
     // ── Restaurant bill ───────────────────────────────────────────────────────
     itemTotal: safeItemTotal,
@@ -103,6 +121,12 @@ function calculateSettlementBreakdown({
     gstPercentOnPackaging: round(Math.max(0, packagingGstPercent)),
     gstPercentOnDiscount: round(Math.max(0, discountGstPercent)),
     gstPercentOnPlatform: round(Math.max(0, platformGstPercent)),
+    adminCommissionAmount: safeAdminCommissionAmount,
+    adminCommissionGstPercent: round(Math.max(0, adminCommissionGstPercent)),
+    adminCommissionGst,
+    restaurantNet,
+    restaurantNetEarning,
+    customerRestaurantBill,
     computedAt: new Date(),
     computedVersion: "settlement-v2",
   };

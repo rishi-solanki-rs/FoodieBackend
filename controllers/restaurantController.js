@@ -1469,7 +1469,7 @@ exports.getRestaurantWalletEarnings = async (req, res) => {
             _id: null,
             totalRevenue: { $sum: '$totalAmount' },
             totalCommission: { $sum: '$adminCommission' },
-            totalRestaurantNet: { $sum: '$restaurantCommission' },
+            totalRestaurantNet: { $sum: '$restaurantEarning' },
             totalOrders: { $sum: 1 },
           }
         }

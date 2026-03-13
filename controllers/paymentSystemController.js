@@ -1,6 +1,7 @@
 
 const RiderWallet = require('../models/RiderWallet');
 const RestaurantWallet = require('../models/RestaurantWallet');
+const AdminCommissionWallet = require('../models/AdminCommissionWallet');
 const PaymentTransaction = require('../models/PaymentTransaction');
 const Order = require('../models/Order');
 const Rider = require('../models/Rider');
@@ -104,14 +105,20 @@ exports.getRestaurantWalletByAdmin = async (req, res) => {
 };
 exports.getAdminSummary = async (req, res) => {
   try {
-    const [totalOnline, totalCommission, totalPaidOut, pendingPayouts] = await Promise.all([
+    const [totalOnline, adminWallet, commissionFromLedger, totalPaidOut, pendingPayouts] = await Promise.all([
       PaymentTransaction.aggregate([
         { $match: { type: { $in: ['online_payment', 'wallet_payment'] } } },
         { $group: { _id: null, total: { $sum: '$amount' } } }
       ]),
+      AdminCommissionWallet.findOne().lean(),
       PaymentTransaction.aggregate([
-        { $match: { type: 'restaurant_commission' } },
-        { $group: { _id: null, total: { $sum: '$amount' } } }
+        {
+          $match: {
+            type: { $in: ['online_payment', 'wallet_payment'] },
+            status: 'completed',
+          }
+        },
+        { $group: { _id: null, total: { $sum: { $ifNull: ['$breakdown.commissionAmount', 0] } } } }
       ]),
       PaymentTransaction.aggregate([
         { $match: { type: { $in: ['restaurant_weekly_payout', 'rider_weekly_payout', 'restaurant_manual_payout', 'rider_manual_payout'] } } },
@@ -119,11 +126,17 @@ exports.getAdminSummary = async (req, res) => {
       ]),
       RestaurantWallet.aggregate([{ $group: { _id: null, total: { $sum: '$balance' } } }]),
     ]);
+
+    const totalCommissionEarned =
+      typeof adminWallet?.totalCommission === 'number'
+        ? adminWallet.totalCommission
+        : (commissionFromLedger[0]?.total || 0);
+
     return res.status(200).json({
       success: true,
       data: {
         totalOnlinePayments: totalOnline[0]?.total || 0,
-        totalCommissionEarned: totalCommission[0]?.total || 0,
+        totalCommissionEarned,
         totalPaidOut: totalPaidOut[0]?.total || 0,
         pendingRestaurantPayouts: pendingPayouts[0]?.total || 0,
       }

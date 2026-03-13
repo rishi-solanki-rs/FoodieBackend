@@ -19,8 +19,10 @@ const buildRatingRange = (minRating, maxRating) => {
     return range;
 };
 const getRiderEarning = (order) => {
-    if (order && typeof order.riderEarning === 'number') return order.riderEarning;
-    return (order?.riderCommission || 0) + (order?.tip || 0);
+    if (order && typeof order?.riderEarnings?.totalRiderEarning === 'number') {
+        return order.riderEarnings.totalRiderEarning;
+    }
+    return 0;
 };
 exports.getRestaurantReport = async (req, res) => {
     try {
@@ -45,10 +47,10 @@ exports.getRestaurantReport = async (req, res) => {
                 const orders = await Order.find({ restaurant: restaurant._id });
                 const totalOrders = orders.length;
                 const deliveredOrders = orders.filter(o => o.status === 'delivered').length;
-                const totalEarnings = orders.reduce((sum, order) => sum + (order.restaurantCommission || 0), 0);
+                const totalEarnings = orders.reduce((sum, order) => sum + (order.restaurantEarning || 0), 0);
                 const pendingPayouts = orders
                     .filter(o => o.status !== 'delivered' && o.status !== 'cancelled')
-                    .reduce((sum, o) => sum + (o.restaurantCommission || 0), 0);
+                    .reduce((sum, o) => sum + (o.restaurantEarning || 0), 0);
                 const payoutsCompleted = totalEarnings - pendingPayouts;
                 return {
                     _id: restaurant._id,
@@ -111,15 +113,11 @@ exports.getRiderReport = async (req, res) => {
                 const deliveredOrders = orders.filter(o => o.status === 'delivered').length;
                 const cancelledOrders = orders.filter(o => o.status === 'cancelled').length;
                 const totalEarnings = orders.reduce((sum, order) => {
-                    if (typeof order.riderEarning === 'number') return sum + order.riderEarning;
-                    return sum + (order.riderCommission || 0) + (order.tip || 0);
+                    return sum + (order.riderEarnings?.totalRiderEarning || 0);
                 }, 0);
                 const pendingPayouts = orders
                     .filter(o => o.status !== 'delivered' && o.status !== 'cancelled')
-                    .reduce((sum, o) => {
-                        if (typeof o.riderEarning === 'number') return sum + o.riderEarning;
-                        return sum + (o.riderCommission || 0) + (o.tip || 0);
-                    }, 0);
+                    .reduce((sum, o) => sum + (o.riderEarnings?.totalRiderEarning || 0), 0);
                 const payoutsCompleted = totalEarnings - pendingPayouts;
                 return {
                     _id: rider._id,
@@ -206,7 +204,7 @@ exports.getOrderReport = async (req, res) => {
                 tax: order.tax || 0,
                 offer: order.discount || 0,
                 adminCommission: order.adminCommission || 0,
-                restaurantEarning: order.restaurantCommission || 0,
+                restaurantEarning: order.restaurantEarning || 0,
                 driverCommission: getRiderEarning(order),
                 tip: order.tip || 0,
                 paymentBreakdown: {
@@ -218,7 +216,12 @@ exports.getOrderReport = async (req, res) => {
                     restaurantBillTotal: order.paymentBreakdown?.restaurantBillTotal ?? 0,
                     foodierDiscount: order.paymentBreakdown?.foodierDiscount ?? order.discount ?? 0,
                     gstOnDiscount: order.paymentBreakdown?.gstOnDiscount ?? 0,
-                    finalPayableToRestaurant: order.paymentBreakdown?.finalPayableToRestaurant ?? order.restaurantCommission ?? 0,
+                    finalPayableToRestaurant: order.paymentBreakdown?.finalPayableToRestaurant ?? 0,
+                    customerRestaurantBill: order.paymentBreakdown?.customerRestaurantBill ?? order.paymentBreakdown?.finalPayableToRestaurant ?? 0,
+                    restaurantNet: order.paymentBreakdown?.restaurantNet ?? order.restaurantEarning ?? 0,
+                    platformBillTotal: order.paymentBreakdown?.platformBillTotal ?? 0,
+                    adminCommissionGst: order.paymentBreakdown?.adminCommissionGst ?? 0,
+                    gstOnPlatform: order.paymentBreakdown?.gstOnPlatform ?? 0,
                 },
                 status: order.status,
                 paymentMethod: order.paymentMethod,
@@ -336,7 +339,7 @@ exports.getProfitLossReport = async (req, res) => {
             deliveryFee: order.deliveryFee || 0,
             offer: order.discount || 0,
             adminCommission: order.adminCommission || 0,
-            restaurantCommission: order.restaurantCommission || 0,
+            restaurantCommission: order.restaurantEarning || 0,
             riderCommission: getRiderEarning(order),
             tip: order.tip || 0,
             isFreeDeli: order.deliveryFee === 0 ? 'Yes' : 'No'
@@ -351,7 +354,9 @@ exports.getProfitLossReport = async (req, res) => {
             totalRestaurantCommission: reportsData.reduce((sum, o) => sum + (o.restaurantCommission || 0), 0),
             totalRiderCommission: reportsData.reduce((sum, o) => sum + (o.riderCommission || 0), 0),
             totalTip: reportsData.reduce((sum, o) => sum + (o.tip || 0), 0),
-            totalTax: reportsData.reduce((sum, o) => sum + (o.tax || 0), 0)
+            totalTax: reportsData.reduce((sum, o) => sum + (o.tax || 0), 0),
+            totalAdminCommissionGstLiability: orders.reduce((sum, o) => sum + (o.paymentBreakdown?.adminCommissionGst || 0), 0),
+            totalPlatformGstLiability: orders.reduce((sum, o) => sum + (o.paymentBreakdown?.gstOnPlatform || 0), 0)
         };
         Object.keys(summary).forEach(key => {
             if (typeof summary[key] === 'number' && key !== 'totalOrdersDelivered') {
@@ -412,7 +417,12 @@ exports.getAdminSettlementReport = async (req, res) => {
                 restaurantBillTotal: pb.restaurantBillTotal ?? 0,
                 foodierDiscount: pb.foodierDiscount ?? order.discount ?? 0,
                 gstOnDiscount: pb.gstOnDiscount ?? 0,
-                finalPayableToRestaurant: pb.finalPayableToRestaurant ?? order.restaurantCommission ?? 0,
+                finalPayableToRestaurant: pb.finalPayableToRestaurant ?? 0,
+                customerRestaurantBill: pb.customerRestaurantBill ?? pb.finalPayableToRestaurant ?? 0,
+                restaurantNet: pb.restaurantNet ?? order.restaurantEarning ?? 0,
+                platformBillTotal: pb.platformBillTotal ?? 0,
+                adminCommissionGst: pb.adminCommissionGst ?? 0,
+                gstOnPlatform: pb.gstOnPlatform ?? 0,
             };
         });
 
@@ -426,6 +436,11 @@ exports.getAdminSettlementReport = async (req, res) => {
             acc.foodierDiscount += row.foodierDiscount || 0;
             acc.gstOnDiscount += row.gstOnDiscount || 0;
             acc.finalPayableToRestaurant += row.finalPayableToRestaurant || 0;
+            acc.customerRestaurantBill += row.customerRestaurantBill || 0;
+            acc.restaurantNet += row.restaurantNet || 0;
+            acc.platformBillTotal += row.platformBillTotal || 0;
+            acc.adminCommissionGst += row.adminCommissionGst || 0;
+            acc.gstOnPlatform += row.gstOnPlatform || 0;
             return acc;
         }, {
             itemTotal: 0,
@@ -437,6 +452,11 @@ exports.getAdminSettlementReport = async (req, res) => {
             foodierDiscount: 0,
             gstOnDiscount: 0,
             finalPayableToRestaurant: 0,
+            customerRestaurantBill: 0,
+            restaurantNet: 0,
+            platformBillTotal: 0,
+            adminCommissionGst: 0,
+            gstOnPlatform: 0,
         });
 
         Object.keys(summary).forEach((key) => {
@@ -444,9 +464,9 @@ exports.getAdminSettlementReport = async (req, res) => {
         });
 
         if (format === 'csv') {
-            let csv = 'orderId,createdAt,status,restaurant,customerName,itemTotal,restaurantDiscount,gstOnFood,packagingCharge,packagingGST,restaurantBillTotal,foodierDiscount,gstOnDiscount,finalPayableToRestaurant\n';
+            let csv = 'orderId,createdAt,status,restaurant,customerName,itemTotal,restaurantDiscount,gstOnFood,packagingCharge,packagingGST,restaurantBillTotal,foodierDiscount,gstOnDiscount,finalPayableToRestaurant,customerRestaurantBill,restaurantNet,platformBillTotal,adminCommissionGst,gstOnPlatform\n';
             rows.forEach((r) => {
-                csv += `${r.orderId},${r.createdAt?.toISOString?.() || ''},${r.status || ''},"${r.restaurant}","${r.customerName}",${r.itemTotal},${r.restaurantDiscount},${r.gstOnFood},${r.packagingCharge},${r.packagingGST},${r.restaurantBillTotal},${r.foodierDiscount},${r.gstOnDiscount},${r.finalPayableToRestaurant}\n`;
+                csv += `${r.orderId},${r.createdAt?.toISOString?.() || ''},${r.status || ''},"${r.restaurant}","${r.customerName}",${r.itemTotal},${r.restaurantDiscount},${r.gstOnFood},${r.packagingCharge},${r.packagingGST},${r.restaurantBillTotal},${r.foodierDiscount},${r.gstOnDiscount},${r.finalPayableToRestaurant},${r.customerRestaurantBill},${r.restaurantNet},${r.platformBillTotal},${r.adminCommissionGst},${r.gstOnPlatform}\n`;
             });
             res.header('Content-Type', 'text/csv');
             res.header('Content-Disposition', `attachment; filename="admin-settlement-${Date.now()}.csv"`);

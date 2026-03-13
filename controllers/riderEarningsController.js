@@ -49,24 +49,55 @@ exports.getEarningsSummary = async (req, res) => {
                     $group: {
                         _id: null,
                         totalOrders: { $sum: 1 },
-                        baseEarning: { $sum: '$riderCommission' },
+                        baseEarning: {
+                            $sum: {
+                                $add: [
+                                    { $ifNull: ['$riderEarnings.deliveryCharge', 0] },
+                                    { $ifNull: ['$riderEarnings.platformFee', 0] },
+                                ],
+                            },
+                        },
                         tips: { $sum: '$tip' },
-                        incentives: { $sum: '$riderIncentive' },
-                        totalEarning: { $sum: '$riderEarning' },
+                        incentives: { $sum: { $ifNull: ['$riderEarnings.incentive', 0] } },
+                        totalEarning: { $sum: { $ifNull: ['$riderEarnings.totalRiderEarning', 0] } },
                     }
                 }
             ]),
             Order.aggregate([
                 { $match: { rider: rider._id, status: 'delivered', deliveredAt: { $gte: sod } } },
-                { $group: { _id: null, orders: { $sum: 1 }, earning: { $sum: '$riderEarning' }, tips: { $sum: '$tip' }, incentives: { $sum: '$riderIncentive' } } }
+                {
+                    $group: {
+                        _id: null,
+                        orders: { $sum: 1 },
+                        earning: { $sum: { $ifNull: ['$riderEarnings.totalRiderEarning', 0] } },
+                        tips: { $sum: '$tip' },
+                        incentives: { $sum: { $ifNull: ['$riderEarnings.incentive', 0] } },
+                    },
+                }
             ]),
             Order.aggregate([
                 { $match: { rider: rider._id, status: 'delivered', deliveredAt: { $gte: sow } } },
-                { $group: { _id: null, orders: { $sum: 1 }, earning: { $sum: '$riderEarning' }, tips: { $sum: '$tip' }, incentives: { $sum: '$riderIncentive' } } }
+                {
+                    $group: {
+                        _id: null,
+                        orders: { $sum: 1 },
+                        earning: { $sum: { $ifNull: ['$riderEarnings.totalRiderEarning', 0] } },
+                        tips: { $sum: '$tip' },
+                        incentives: { $sum: { $ifNull: ['$riderEarnings.incentive', 0] } },
+                    },
+                }
             ]),
             Order.aggregate([
                 { $match: { rider: rider._id, status: 'delivered', deliveredAt: { $gte: som } } },
-                { $group: { _id: null, orders: { $sum: 1 }, earning: { $sum: '$riderEarning' }, tips: { $sum: '$tip' }, incentives: { $sum: '$riderIncentive' } } }
+                {
+                    $group: {
+                        _id: null,
+                        orders: { $sum: 1 },
+                        earning: { $sum: { $ifNull: ['$riderEarnings.totalRiderEarning', 0] } },
+                        tips: { $sum: '$tip' },
+                        incentives: { $sum: { $ifNull: ['$riderEarnings.incentive', 0] } },
+                    },
+                }
             ]),
             RiderWallet.findOne({ rider: rider._id }).lean(),
         ]);
@@ -139,7 +170,7 @@ exports.getEarningsOrders = async (req, res) => {
 
         const [orders, total] = await Promise.all([
             Order.find(matchStage)
-                .select('_id totalAmount itemTotal riderEarning riderCommission riderIncentive riderIncentivePercent tip deliveryFee deliveredAt createdAt paymentMethod deliveryAddress restaurant items')
+                .select('_id totalAmount itemTotal riderEarnings tip deliveryFee deliveredAt createdAt paymentMethod deliveryAddress restaurant items')
                 .populate('restaurant', 'name address image')
                 .sort({ deliveredAt: -1 })
                 .skip(skip)
@@ -150,10 +181,10 @@ exports.getEarningsOrders = async (req, res) => {
 
         // Shape each order into a clean earnings card
         const earningsCards = orders.map((o) => {
-            const base = r2(o.riderCommission || 0);
+            const base = r2((o.riderEarnings?.deliveryCharge || 0) + (o.riderEarnings?.platformFee || 0));
             const tip = r2(o.tip || 0);
-            const incentive = r2(o.riderIncentive || 0);
-            const total = r2(o.riderEarning || base + tip + incentive);
+            const incentive = r2(o.riderEarnings?.incentive || 0);
+            const total = r2(o.riderEarnings?.totalRiderEarning || base + incentive);
             return {
                 orderId: o._id,
                 deliveredAt: o.deliveredAt,
@@ -168,7 +199,7 @@ exports.getEarningsOrders = async (req, res) => {
                     base,
                     tip,
                     incentive,
-                    incentivePercent: o.riderIncentivePercent || 0,
+                    incentivePercent: o.riderEarnings?.incentivePercentAtCompletion || 0,
                     total,
                 },
             };
@@ -214,9 +245,9 @@ exports.getSingleOrderEarnings = async (req, res) => {
 
         if (!order) return sendError(res, 404, 'Order not found or not assigned to you');
 
-        const base = r2(order.riderCommission || 0);
+        const base = r2((order.riderEarnings?.deliveryCharge || 0) + (order.riderEarnings?.platformFee || 0));
         const tip = r2(order.tip || 0);
-        const total = r2(order.riderEarning || base + tip);
+        const total = r2(order.riderEarnings?.totalRiderEarning || base);
 
         return res.status(200).json({
             success: true,
@@ -250,13 +281,14 @@ exports.getSingleOrderEarnings = async (req, res) => {
                 earnings: {
                     baseCommission: base,
                     tip,
-                    incentive: r2(order.riderIncentive || 0),
-                    incentivePercent: order.riderIncentivePercent || 0,
+                    incentive: r2(order.riderEarnings?.incentive || 0),
+                    incentivePercent: order.riderEarnings?.incentivePercentAtCompletion || 0,
                     total,
                     breakdown: {
-                        riderEarningField: r2(order.riderEarning || 0),
-                        riderCommissionField: r2(order.riderCommission || 0),
-                        riderIncentiveField: r2(order.riderIncentive || 0),
+                        deliveryCharge: r2(order.riderEarnings?.deliveryCharge || 0),
+                        platformFee: r2(order.riderEarnings?.platformFee || 0),
+                        riderIncentive: r2(order.riderEarnings?.incentive || 0),
+                        riderTotalEarning: r2(order.riderEarnings?.totalRiderEarning || 0),
                         tipField: r2(order.tip || 0),
                     },
                 },
