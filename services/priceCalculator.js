@@ -5,7 +5,7 @@
  * ─────────────────────────────────────
  * 1. Item total      = sum of (basePrice + variation.price + addOns.price) × qty
  * 2. GST             = per-item GST% (0/5/12/18) applied on the full line total (base + variation + add-ons)
- * 3. Packaging       = restaurant.packagingCharge (set per restaurant)
+ * 3. Packaging       = sum of product.packagingCharge × qty
  * 4. Platform fee    = global, admin-configurable (default ₹9)
  * 5. Delivery fee    = distance-based slab (admin-configurable):
  *                        0 – 5 km  → ₹3 / km
@@ -20,6 +20,7 @@ const Promocode = require('../models/Promocode');
 const Restaurant = require('../models/Restaurant');
 const Order = require('../models/Order');
 const AdminSetting = require('../models/AdminSetting');
+const Product = require('../models/Product');
 const { calculateSettlementBreakdown } = require('./settlementCalculator');
 const { logger } = require('../utils/logger');
 
@@ -33,6 +34,102 @@ function toNonNegativeNumber(value, fallback = 0) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return fallback;
   return Math.max(0, numeric);
+}
+
+function toNullableNumber(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function nearlyEqual(a, b, tolerance = 0.02) {
+  return Math.abs(round(a) - round(b)) <= tolerance;
+}
+
+function getVariationPrice(variation) {
+  return round(toNonNegativeNumber(variation?.price, 0));
+}
+
+function getAddOnPrice(addOns) {
+  if (!Array.isArray(addOns) || addOns.length === 0) {
+    return 0;
+  }
+
+  return round(addOns.reduce((sum, addOn) => sum + toNonNegativeNumber(addOn?.price, 0), 0));
+}
+
+function normalizePricingItem({ item, product, adminSettings }) {
+  const quantity = Math.max(1, Math.trunc(toNonNegativeNumber(item?.quantity, 1)) || 1);
+  const variationPrice = getVariationPrice(item?.variation);
+  const addonPrice = getAddOnPrice(item?.addOns);
+  const explicitUnitPrice = toNullableNumber(item?.price);
+  const explicitBasePrice = toNullableNumber(item?.basePrice);
+  const productBasePrice = toNullableNumber(product?.basePrice);
+
+  let basePrice = 0;
+  let unitPrice = 0;
+
+  if (item?.priceIncludesComponents === false) {
+    basePrice = round(Math.max(0, explicitUnitPrice ?? explicitBasePrice ?? productBasePrice ?? 0));
+    unitPrice = round(basePrice + variationPrice + addonPrice);
+  } else if (explicitUnitPrice !== null) {
+    unitPrice = round(Math.max(0, explicitUnitPrice));
+
+    if (explicitBasePrice !== null) {
+      basePrice = round(Math.max(0, explicitBasePrice));
+    } else if (productBasePrice !== null && nearlyEqual(unitPrice, productBasePrice + variationPrice + addonPrice, 0.05)) {
+      basePrice = round(Math.max(0, productBasePrice));
+    } else {
+      basePrice = round(Math.max(0, unitPrice - variationPrice - addonPrice));
+    }
+  } else {
+    basePrice = round(Math.max(0, explicitBasePrice ?? productBasePrice ?? 0));
+    unitPrice = round(basePrice + variationPrice + addonPrice);
+  }
+
+  const lineTotal = round(unitPrice * quantity);
+  const gstPercent = toNonNegativeNumber(
+    typeof item?.gstPercent === 'number' ? item.gstPercent : product?.gstPercent,
+    adminSettings.defaultGstPercent,
+  );
+  const itemGstAmount = round(lineTotal * (gstPercent / 100));
+  const cgst = round(itemGstAmount / 2);
+  const sgst = round(itemGstAmount - cgst);
+
+  const unitPackagingCharge = round(
+    toNonNegativeNumber(item?.packagingCharge, toNonNegativeNumber(product?.packagingCharge, 0)),
+  );
+  const packagingGstPercent = toNonNegativeNumber(
+    typeof item?.packagingGstPercent === 'number' ? item.packagingGstPercent : product?.packagingGstPercent,
+    0,
+  );
+  const packagingTotal = round(unitPackagingCharge * quantity);
+  const packagingGstAmount = round(packagingTotal * (packagingGstPercent / 100));
+
+  const commissionPercent = toNonNegativeNumber(
+    typeof item?.adminCommissionPercent === 'number' ? item.adminCommissionPercent : product?.adminCommissionPercent,
+    adminSettings?.payoutConfig?.defaultRestaurantCommissionPercent ?? 0,
+  );
+  const adminCommissionAmount = round(lineTotal * (commissionPercent / 100));
+
+  return {
+    productId: item?.product ? String(item.product) : null,
+    quantity,
+    basePrice,
+    variationPrice,
+    addonPrice,
+    unitPrice,
+    lineTotal,
+    gstPercent,
+    itemGstAmount,
+    cgst,
+    sgst,
+    unitPackagingCharge,
+    packagingTotal,
+    packagingGstPercent,
+    packagingGstAmount,
+    commissionPercent,
+    adminCommissionAmount,
+  };
 }
 
 /**
@@ -162,34 +259,30 @@ async function calculateOrderPrice({
 
     const adminSettings = await getAdminSettings();
 
+    const productIds = Array.isArray(items)
+      ? items.map((item) => item?.product).filter(Boolean)
+      : [];
+    const products = productIds.length > 0
+      ? await Product.find({ _id: { $in: productIds } })
+          .select('_id basePrice gstPercent packagingCharge packagingGstPercent adminCommissionPercent')
+          .lean()
+      : [];
+    const productMap = new Map(products.map((product) => [String(product._id), product]));
+    const normalizedItems = (Array.isArray(items) ? items : []).map((item) =>
+      normalizePricingItem({
+        item,
+        product: item?.product ? productMap.get(String(item.product)) : null,
+        adminSettings,
+      }),
+    );
+
     // 1. Item total + GST
-    let itemTotal = 0;
-    let gstTotal = 0;
+    const itemTotal = round(normalizedItems.reduce((sum, item) => sum + item.lineTotal, 0));
+    const gstTotal = round(normalizedItems.reduce((sum, item) => sum + item.itemGstAmount, 0));
 
-    for (const item of items) {
-      let unitPrice = item.price || 0;
-
-      if (item.variation?.price) {
-        unitPrice += item.variation.price;
-      }
-      if (Array.isArray(item.addOns)) {
-        unitPrice += item.addOns.reduce((s, a) => s + (a.price || 0), 0);
-      }
-
-      const qty = item.quantity || 1;
-      const lineTotal = unitPrice * qty;
-      itemTotal += lineTotal;
-
-      // GST on full line total (base + variation + add-ons) — uses product's slab, falls back to admin default
-      const gstPercent = typeof item.gstPercent === 'number' ? item.gstPercent : adminSettings.defaultGstPercent;
-      gstTotal += lineTotal * (gstPercent / 100);
-    }
-
-    itemTotal = round(itemTotal);
-    gstTotal = round(gstTotal);
-
-    // 2. Packaging charge (per restaurant)
-    const packaging = round(restaurant.packagingCharge || 0);
+    // 2. Packaging charge (per product × quantity)
+    const packaging = round(normalizedItems.reduce((sum, item) => sum + item.packagingTotal, 0));
+    const packagingGstTotal = round(normalizedItems.reduce((sum, item) => sum + item.packagingGstAmount, 0));
 
     // 3. Delivery fee (distance slabs from AdminSetting)
     const deliveryFee = resolveDeliveryFee({
@@ -221,10 +314,9 @@ async function calculateOrderPrice({
 
     // 6. Canonical restaurant billing + platform settlement breakdown
     const effectiveFoodGstPercent = itemTotal > 0 ? round((gstTotal / itemTotal) * 100) : adminSettings.defaultGstPercent;
-    const packagingGstPercent = adminSettings.defaultGstPercent;
+    const packagingGstPercent = packaging > 0 ? round((packagingGstTotal / packaging) * 100) : 0;
     const discountGstPercent = adminSettings.defaultGstPercent;
-    const estimatedCommissionPercent = Number(restaurant.adminCommission ?? adminSettings?.payoutConfig?.defaultRestaurantCommissionPercent ?? 0);
-    const estimatedAdminCommission = round(itemTotal * (Math.max(0, estimatedCommissionPercent) / 100));
+    const estimatedAdminCommission = round(normalizedItems.reduce((sum, item) => sum + item.adminCommissionAmount, 0));
     const settlement = calculateSettlementBreakdown({
       itemTotal,
       restaurantDiscount: 0,
@@ -274,6 +366,7 @@ async function calculateOrderPrice({
         gstOnDiscount: settlement.gstOnDiscount,
         finalPayableToRestaurant: settlement.finalPayableToRestaurant,
         paymentBreakdown: settlement,
+        itemsDetailed: normalizedItems,
         tip: round(tip),
         totalAmount,
         walletDeduction,

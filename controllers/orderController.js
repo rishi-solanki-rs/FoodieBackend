@@ -118,11 +118,12 @@ const calculateBill = async (
     const tip = normalizeTip(cart?.tip);
     const pricingResult = await calculateOrderPrice({
       items: restaurantItems.map((item) => ({
+        product: item.product,
         price: item.price,
         quantity: item.quantity,
-        gstPercent: item.gstPercent,  // per-product GST slab stored at add-to-cart time
-        variation: null,              // already baked into item.price — do NOT double-count
-        addOns: []                    // already baked into item.price — do NOT double-count
+        gstPercent: item.gstPercent,
+        variation: item.variation || null,
+        addOns: item.addOns || [],
       })),
       restaurantId,
       userId,
@@ -153,6 +154,7 @@ const calculateBill = async (
       gstOnDiscount: breakdown.gstOnDiscount || 0,
       finalPayableToRestaurant: breakdown.finalPayableToRestaurant || 0,
       paymentBreakdown: breakdown.paymentBreakdown || null,
+      itemDetails: breakdown.itemsDetailed || [],
       toPay: breakdown.totalAmount,
       totalBeforeTip: Math.max(0, breakdown.totalAmount - breakdown.tip),
       tip: breakdown.tip,
@@ -284,45 +286,33 @@ exports.placeOrder = async (req, res) => {
     const initialStatusDesc = isOnlineOrder
       ? "Waiting for payment to be completed via Razorpay."
       : "Your order has been placed";
-    const productIds = cart.items.map((item) => item?.product).filter(Boolean);
-    const products = await Product.find({ _id: { $in: productIds } })
-      .select('_id adminCommissionPercent gstPercent')
-      .lean();
-    const productCommissionMap = new Map(
-      products.map((p) => [p._id.toString(), Number.isFinite(Number(p.adminCommissionPercent)) ? Number(p.adminCommissionPercent) : null])
-    );
-    const productGstMap = new Map(
-      products.map((p) => [p._id.toString(), typeof p.gstPercent === 'number' ? p.gstPercent : null])
-    );
-
     const adminSettings = await AdminSetting.findOne().lean();
     const payoutConfig = adminSettings?.payoutConfig || {};
     const incentivePercent = payoutConfig.riderIncentivePercent ?? 5;
     const adminCommissionGstPercent = adminSettings?.adminCommissionGstPercent ?? 18;
+    const defaultCommissionPercent = Number(payoutConfig.defaultRestaurantCommissionPercent ?? 0);
 
     let adminCommission = 0;
     let adminCommissionGstTotal = 0;
     let restaurantEarningSum = 0;
-    const orderItems = cart.items.map((item) => {
-      // item.price from cart = basePrice + variation.price + Σ addOns.price (set by cartController)
-      // Use it directly as the full unit price so commission covers all three components.
-      const fullUnitPrice = Number(item.price) || 0;
-      const lineTotal = Math.round(fullUnitPrice * (Number(item.quantity) || 0) * 100) / 100;
-      const productCommission = productCommissionMap.get(String(item.product));
-      const commissionPercent = Number.isFinite(productCommission)
-        ? productCommission
-        : (Number(restaurant.adminCommission) || 0);
+    const calculatedItems = Array.isArray(bill.itemDetails) ? bill.itemDetails : [];
+    const orderItems = cart.items.map((item, index) => {
+      const calculatedItem = calculatedItems[index] || {};
+      const fullUnitPrice = Math.round((Number(calculatedItem.unitPrice ?? item.price) || 0) * 100) / 100;
+      const lineTotal = Math.round((Number(calculatedItem.lineTotal) || (fullUnitPrice * (Number(item.quantity) || 0))) * 100) / 100;
+      const commissionPercent = Number.isFinite(Number(calculatedItem.commissionPercent))
+        ? Number(calculatedItem.commissionPercent)
+        : defaultCommissionPercent;
       const itemAdminCommission = Math.round(lineTotal * (commissionPercent / 100) * 100) / 100;
       const itemAdminCommissionGst = Math.round(itemAdminCommission * (adminCommissionGstPercent / 100) * 100) / 100;
 
-      // Per-item GST breakdown for invoice
-      const itemGstPercent = productGstMap.get(String(item.product)) ?? (item.gstPercent || 0);
-      const itemGstAmount = Math.round(lineTotal * (itemGstPercent / 100) * 100) / 100;
-      const itemCgst = Math.round(itemGstAmount / 2 * 100) / 100;
-      const itemSgst = Math.round((itemGstAmount - itemCgst) * 100) / 100;
+      const itemGstPercent = Number(calculatedItem.gstPercent ?? item.gstPercent ?? 0);
+      const itemGstAmount = Math.round((Number(calculatedItem.itemGstAmount) || (lineTotal * (itemGstPercent / 100))) * 100) / 100;
+      const itemCgst = Math.round((Number(calculatedItem.cgst) || (itemGstAmount / 2)) * 100) / 100;
+      const itemSgst = Math.round((Number(calculatedItem.sgst) || (itemGstAmount - itemCgst)) * 100) / 100;
       const itemRestaurantEarning = Math.max(
         0,
-        Math.round((lineTotal - itemAdminCommission - itemGstAmount - itemAdminCommissionGst) * 100) / 100,
+        Math.round((lineTotal - itemAdminCommission - itemAdminCommissionGst) * 100) / 100,
       );
 
       adminCommission += itemAdminCommission;
@@ -333,12 +323,19 @@ exports.placeOrder = async (req, res) => {
         product: item.product,
         name: item.name,
         quantity: item.quantity,
-        price: item.price,
+        basePrice: Number(calculatedItem.basePrice ?? Math.max(0, fullUnitPrice - (Number(calculatedItem.variationPrice) || 0) - (Number(calculatedItem.addonPrice) || 0))) || 0,
+        variationPrice: Number(calculatedItem.variationPrice || 0),
+        addonPrice: Number(calculatedItem.addonPrice || 0),
+        price: fullUnitPrice,
         lineTotal,
         gstPercent: itemGstPercent,
         itemGstAmount,
         cgst: itemCgst,
         sgst: itemSgst,
+        packagingCharge: Number(calculatedItem.unitPackagingCharge || 0),
+        packagingTotal: Number(calculatedItem.packagingTotal || 0),
+        packagingGstPercent: Number(calculatedItem.packagingGstPercent || 0),
+        packagingGstAmount: Number(calculatedItem.packagingGstAmount || 0),
         commissionPercent,
         adminCommissionAmount: itemAdminCommission,
         restaurantEarningAmount: itemRestaurantEarning,

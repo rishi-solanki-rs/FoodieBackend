@@ -85,7 +85,7 @@ function calculateSettlementBreakdown({
   );
   const restaurantNet = round(Math.max(
     0,
-    taxableAmountFood - safeAdminCommissionAmount - gstOnFood - adminCommissionGst,
+    taxableAmountFood - safeAdminCommissionAmount - adminCommissionGst,
   ));
   const restaurantNetEarning = restaurantNet;
   const customerRestaurantBill = finalPayableToRestaurant;
