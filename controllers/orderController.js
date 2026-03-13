@@ -3041,21 +3041,172 @@ const CustomerBill   = require('../models/CustomerBill');
 const RestaurantBill = require('../models/RestaurantBill');
 const RiderBill      = require('../models/RiderBill');
 
+const asAmount = (value) => {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? Math.round(numeric * 100) / 100 : 0;
+};
+
+const splitGst = (value) => {
+  const total = asAmount(value);
+  const cgst = asAmount(total / 2);
+  const sgst = asAmount(total - cgst);
+  return { cgst, sgst, total };
+};
+
+const buildBillingSectionsFromOrder = (orderLike) => {
+  const order = orderLike || {};
+  const pb = order.paymentBreakdown || {};
+  const rider = order.riderEarnings || {};
+
+  const itemsTotal = asAmount(pb.itemTotal ?? order.itemTotal ?? 0);
+  const restaurantDiscount = asAmount(pb.restaurantDiscount ?? 0);
+  const platformDiscount = asAmount(pb.foodierDiscount ?? order.discount ?? 0);
+  const subTotal = asAmount(Math.max(0, itemsTotal - restaurantDiscount - platformDiscount));
+
+  const gstOnFood = asAmount(pb.gstOnFood ?? 0);
+  const cgstFood = asAmount(pb.cgstOnFood ?? (gstOnFood / 2));
+  const sgstFood = asAmount(pb.sgstOnFood ?? (gstOnFood - cgstFood));
+  const packagingCharge = asAmount(pb.packagingCharge ?? order.packaging ?? 0);
+  const packagingGst = asAmount(pb.packagingGST ?? 0);
+  const deliveryFee = asAmount(pb.deliveryCharge ?? order.deliveryFee ?? 0);
+  const platformFee = asAmount(order.platformFee ?? pb.platformFee ?? 0);
+  const tip = asAmount(order.tip ?? 0);
+
+  const totalCgstCustomer = asAmount((pb.cgstOnFood ?? (gstOnFood / 2)) + (pb.cgstOnPackaging ?? (packagingGst / 2)) + (pb.cgstPlatform ?? (asAmount(pb.gstOnPlatform ?? 0) / 2)));
+  const totalSgstCustomer = asAmount((pb.sgstOnFood ?? (gstOnFood / 2)) + (pb.sgstOnPackaging ?? (packagingGst / 2)) + (pb.sgstPlatform ?? (asAmount(pb.gstOnPlatform ?? 0) / 2)));
+  const totalGstCustomer = asAmount(totalCgstCustomer + totalSgstCustomer);
+
+  const commissionAmount = asAmount(order.adminCommission ?? 0);
+  const commissionPercent = itemsTotal > 0 ? asAmount((commissionAmount / itemsTotal) * 100) : 0;
+  const commissionGst = asAmount(pb.adminCommissionGst ?? 0);
+  const commissionGstSplit = splitGst(commissionGst);
+
+  const restaurantGross = asAmount(pb.restaurantGross ?? (itemsTotal + packagingCharge));
+  const netEarning = asAmount(pb.restaurantNet ?? order.restaurantEarning ?? 0);
+
+  const riderDeliveryCharge = asAmount(rider.deliveryCharge ?? 0);
+  const riderPlatformCredit = asAmount(rider.platformFee ?? 0);
+  const riderIncentive = asAmount(rider.incentive ?? 0);
+  const riderIncentivePercent = asAmount(rider.incentivePercentAtCompletion ?? 0);
+  const riderTotalEarning = asAmount(rider.totalRiderEarning ?? (riderDeliveryCharge + riderPlatformCredit + riderIncentive));
+
+  const totalCollectionFromCustomer = asAmount(pb.platformBillTotal ?? (deliveryFee + platformFee + asAmount(pb.gstOnPlatform ?? 0)));
+  const sharedWithRider = asAmount(riderDeliveryCharge + riderPlatformCredit);
+  const retainedByPlatform = asAmount(totalCollectionFromCustomer - sharedWithRider);
+
+  const gstOnCommission = commissionGst;
+  const gstOnPlatform = asAmount(pb.gstOnPlatform ?? 0);
+  const platformCgst = asAmount(pb.cgstPlatform ?? (gstOnPlatform / 2));
+  const platformSgst = asAmount(pb.sgstPlatform ?? (gstOnPlatform - platformCgst));
+  const totalCgstPlatform = asAmount(commissionGstSplit.cgst + platformCgst);
+  const totalSgstPlatform = asAmount(commissionGstSplit.sgst + platformSgst);
+  const totalGstPlatform = asAmount(totalCgstPlatform + totalSgstPlatform);
+  const netPlatformEarning = asAmount(commissionAmount + retainedByPlatform);
+
+  return {
+    customerBill: {
+      itemsTotal,
+      restaurantDiscount,
+      platformDiscount,
+      subTotal,
+      gstOnFood,
+      cgstFood,
+      sgstFood,
+      packagingCharge,
+      deliveryFee,
+      platformFee,
+      tip,
+      totalGstSummary: {
+        totalCgst: totalCgstCustomer,
+        totalSgst: totalSgstCustomer,
+        totalGst: totalGstCustomer,
+      },
+      totalPayable: asAmount(order.totalAmount ?? 0),
+      paymentMethod: order.paymentMethod || null,
+      paymentStatus: order.paymentStatus || null,
+      items: Array.isArray(order.items)
+        ? order.items.map((item) => ({
+          name: typeof item?.name === 'string' ? item.name : (item?.name?.en || item?.name?.de || item?.name?.ar || 'Item'),
+          quantity: Number(item?.quantity || 0),
+          price: asAmount(item?.price || 0),
+          lineTotal: asAmount(item?.lineTotal || 0),
+        }))
+        : [],
+    },
+    restaurantBill: {
+      itemsTotal,
+      restaurantDiscount,
+      packaging: packagingCharge,
+      restaurantGross,
+      gstCollected: {
+        gstOnFood,
+        cgstFood,
+        sgstFood,
+      },
+      commission: {
+        commissionPercent,
+        commissionAmount,
+      },
+      commissionGst: {
+        gstOnCommission,
+        cgstOnCommission: commissionGstSplit.cgst,
+        sgstOnCommission: commissionGstSplit.sgst,
+      },
+      netEarning,
+    },
+    riderBill: {
+      deliveryCharge: riderDeliveryCharge,
+      platformFeeCredit: riderPlatformCredit,
+      incentive: {
+        incentivePercent: riderIncentivePercent,
+        incentiveAmount: riderIncentive,
+      },
+      earningsBreakdown: {
+        deliveryCharge: riderDeliveryCharge,
+        platformCredit: riderPlatformCredit,
+        incentive: riderIncentive,
+      },
+      totalEarning: riderTotalEarning,
+      walletCreditNote: 'Credited to rider wallet after delivery',
+    },
+    platformBill: {
+      commission: {
+        commissionPercent,
+        commissionAmount,
+      },
+      commissionGst: {
+        cgstCommission: commissionGstSplit.cgst,
+        sgstCommission: commissionGstSplit.sgst,
+        totalCommissionGst: commissionGstSplit.total,
+      },
+      platformFee,
+      deliveryCharges: deliveryFee,
+      totalCollectionFromCustomer,
+      sharedWithRider,
+      retainedByPlatform,
+      gstBreakdown: {
+        gstOnCommission,
+        gstOnPlatform,
+        totalCgst: totalCgstPlatform,
+        totalSgst: totalSgstPlatform,
+        totalGst: totalGstPlatform,
+      },
+      netPlatformEarning,
+    },
+  };
+};
+
 /** GET /orders/:id/customer-bill — Customer fetches their receipt */
 exports.getCustomerBill = async (req, res) => {
   try {
     if (!req.user || !isValidObjectId(req.user._id)) return sendError(res, 401, 'Unauthorized');
-    const bill = await CustomerBill
-      .findOne({ order: req.params.id })
-      .populate('order', 'status createdAt deliveredAt paymentMethod')
-      .populate('restaurant', 'name address image')
-      .lean();
-    if (!bill) return sendError(res, 404, 'Bill not yet generated for this order');
-    // Customers may only view their own bills
-    if (bill.customer.toString() !== req.user._id.toString()) {
+    const order = await Order.findById(req.params.id).lean();
+    if (!order) return sendError(res, 404, 'Order not found');
+    if (order.customer.toString() !== req.user._id.toString()) {
       return sendError(res, 403, 'Access denied');
     }
-    return res.status(200).json({ success: true, bill });
+    const billing = buildBillingSectionsFromOrder(order);
+    return res.status(200).json({ success: true, ...billing });
   } catch (err) {
     return sendError(res, 500, 'Failed to fetch customer bill', err.message);
   }
@@ -3067,12 +3218,13 @@ exports.getRestaurantBill = async (req, res) => {
     if (!req.user || !isValidObjectId(req.user._id)) return sendError(res, 401, 'Unauthorized');
     const restaurant = await Restaurant.findOne({ owner: req.user._id }).select('_id').lean();
     if (!restaurant) return sendError(res, 404, 'Restaurant not found');
-    const bill = await RestaurantBill
-      .findOne({ order: req.params.id, restaurant: restaurant._id })
-      .populate('order', 'status createdAt deliveredAt paymentMethod')
-      .lean();
-    if (!bill) return sendError(res, 404, 'Bill not yet generated for this order');
-    return res.status(200).json({ success: true, bill });
+    const order = await Order.findById(req.params.id).lean();
+    if (!order) return sendError(res, 404, 'Order not found');
+    if (order.restaurant.toString() !== restaurant._id.toString()) {
+      return sendError(res, 403, 'Access denied');
+    }
+    const billing = buildBillingSectionsFromOrder(order);
+    return res.status(200).json({ success: true, ...billing });
   } catch (err) {
     return sendError(res, 500, 'Failed to fetch restaurant bill', err.message);
   }
@@ -3084,12 +3236,13 @@ exports.getRiderBill = async (req, res) => {
     if (!req.user || !isValidObjectId(req.user._id)) return sendError(res, 401, 'Unauthorized');
     const riderProfile = await Rider.findOne({ user: req.user._id }).select('_id').lean();
     if (!riderProfile) return sendError(res, 404, 'Rider profile not found');
-    const bill = await RiderBill
-      .findOne({ order: req.params.id, rider: riderProfile._id })
-      .populate('order', 'status createdAt deliveredAt paymentMethod')
-      .lean();
-    if (!bill) return sendError(res, 404, 'Bill not yet generated for this order');
-    return res.status(200).json({ success: true, bill });
+    const order = await Order.findById(req.params.id).lean();
+    if (!order) return sendError(res, 404, 'Order not found');
+    if (!order.rider || order.rider.toString() !== riderProfile._id.toString()) {
+      return sendError(res, 403, 'Access denied');
+    }
+    const billing = buildBillingSectionsFromOrder(order);
+    return res.status(200).json({ success: true, ...billing });
   } catch (err) {
     return sendError(res, 500, 'Failed to fetch rider bill', err.message);
   }
@@ -3099,14 +3252,12 @@ exports.getRiderBill = async (req, res) => {
 exports.getAdminBills = async (req, res) => {
   try {
     if (!req.user || !isValidObjectId(req.user._id)) return sendError(res, 401, 'Unauthorized');
-    const [customerBill, restaurantBill, riderBill] = await Promise.all([
-      CustomerBill.findOne({ order: req.params.id }).lean(),
-      RestaurantBill.findOne({ order: req.params.id }).lean(),
-      RiderBill.findOne({ order: req.params.id }).lean(),
-    ]);
+    const order = await Order.findById(req.params.id).lean();
+    if (!order) return sendError(res, 404, 'Order not found');
+    const billing = buildBillingSectionsFromOrder(order);
     return res.status(200).json({
       success: true,
-      bills: { customerBill, restaurantBill, riderBill },
+      ...billing,
     });
   } catch (err) {
     return sendError(res, 500, 'Failed to fetch admin bills', err.message);
