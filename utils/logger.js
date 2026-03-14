@@ -42,8 +42,7 @@ const logOrderTransition = (orderId, oldStatus, newStatus, userId, userRole, rea
   });
 };
 const logPayment = (orderId, userId, paymentMethod, amount, status, error = null) => {
-  const normalizedStatus = String(status || '').toLowerCase();
-  const level = normalizedStatus === 'failed' ? 'error' : 'info';
+  const level = status === 'success' ? 'info' : 'error';
   logger[level]('Payment attempt', {
     event: 'PAYMENT_ATTEMPT',
     orderId,

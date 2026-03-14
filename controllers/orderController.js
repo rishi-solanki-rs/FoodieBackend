@@ -109,13 +109,11 @@ const calculateBill = async (
     if (!cart || safeItems.length === 0) {
       throw new Error("Cart is empty");
     }
-    const restaurantId = cart.restaurant || safeItems[0]?.restaurant;
-    if (!restaurantId) {
+    if (!cart.restaurant) {
       throw new Error("No restaurant in cart");
     }
-    const restaurantItems = safeItems.filter(
-      (item) => item?.restaurant?.toString() === restaurantId.toString(),
-    );
+    const restaurantId = cart.restaurant;
+    const restaurantItems = safeItems;
     if (restaurantItems.length === 0) {
       throw new Error("No items found for this restaurant");
     }
@@ -207,25 +205,14 @@ exports.placeOrder = async (req, res) => {
       return sendError(res, 404, "User not found");
     }
     const cart = await Cart.findOne({ user: req.user._id });
-    if (!cart || !Array.isArray(cart.items) || cart.items.length === 0) {
+    if (!cart || !cart.items || cart.items.length === 0) {
       return sendError(res, 400, "Cart is empty");
     }
-    const sanitizedCartItems = cart.items.filter((item) => item && item.restaurant && item.product);
-    if (sanitizedCartItems.length === 0) {
-      return sendError(res, 400, "Cart is empty");
-    }
-    const restaurantId = sanitizedCartItems[0].restaurant;
-    const hasMixed = sanitizedCartItems.some(
-      (item) => item.restaurant.toString() !== restaurantId.toString(),
-    );
+    const restaurantId = cart.items[0].restaurant;
+    const hasMixed = cart.items.some(item => item.restaurant.toString() !== restaurantId.toString());
     if (hasMixed) {
       return sendError(res, 400, "Cart data corruption: Contains mixed restaurants. Please clear cart.");
     }
-    const billCart = {
-      ...(typeof cart.toObject === 'function' ? cart.toObject() : cart),
-      restaurant: cart.restaurant || restaurantId,
-      items: sanitizedCartItems,
-    };
     const deliveryAddress = user.savedAddresses.id(addressId);
     if (!deliveryAddress) {
       return sendError(res, 400, "Invalid Address ID");
@@ -251,7 +238,7 @@ exports.placeOrder = async (req, res) => {
         calculateDistance(restaurant.location.coordinates, deliveryAddress.location.coordinates) * 100
       ) / 100;
     }
-    let bill = await calculateBill(billCart, req.user._id, deliveryDistanceKm);
+    let bill = await calculateBill(cart, req.user._id, deliveryDistanceKm);
     if ((Number(deliveryDistanceKm) || 0) > 0 && (Number(bill.deliveryFee) || 0) <= 0) {
       const currentAdminSettings = await getAdminSettings();
       const freeDeliveryActive = Boolean(
@@ -271,7 +258,7 @@ exports.placeOrder = async (req, res) => {
           slabs: currentAdminSettings.deliverySlabs,
         });
 
-        bill = await calculateBill(billCart, req.user._id, deliveryDistanceKm);
+        bill = await calculateBill(cart, req.user._id, deliveryDistanceKm);
       }
     }
     const totalPayment = bill.toPay;
@@ -297,6 +284,7 @@ exports.placeOrder = async (req, res) => {
       paymentStatus = "paid";
     } else if (paymentMethod === "online") {
       paymentStatus = "pending";
+      logPayment(null, user._id, "online", totalPayment, "pending");
     }
     const isOnlineOrder = paymentMethod === "online";
     const initialStatus = isOnlineOrder ? "pending" : "placed";
@@ -314,7 +302,7 @@ exports.placeOrder = async (req, res) => {
     let adminCommissionGstTotal = 0;
     let restaurantEarningSum = 0;
     const calculatedItems = Array.isArray(bill.itemDetails) ? bill.itemDetails : [];
-    const orderItems = sanitizedCartItems.map((item, index) => {
+    const orderItems = cart.items.map((item, index) => {
       const calculatedItem = calculatedItems[index] || {};
       const fullUnitPrice = toMoney(Number(calculatedItem.unitPrice ?? item.price) || 0);
       const lineTotal = toMoney(Number(calculatedItem.lineTotal) || (fullUnitPrice * (Number(item.quantity) || 0)));
@@ -526,9 +514,6 @@ exports.placeOrder = async (req, res) => {
       return sendError(res, 400, 'Financial integrity validation failed', integrityResult.issues);
     }
     const newOrder = await Order.create(orderDoc);
-    if (paymentMethod === "online") {
-      logPayment(newOrder._id, user._id, "online", totalPayment, "pending");
-    }
     // Record wallet transaction after order is created so orderId can be linked
     if (paymentMethod === "wallet") {
       await WalletTransaction.create([{
@@ -570,8 +555,8 @@ exports.placeOrder = async (req, res) => {
         customerId: user._id.toString(),
         customerName: user.name,
         restaurantName: restaurant.name,
-        items: sanitizedCartItems.length,
-        itemCount: sanitizedCartItems.length,
+        items: cart.items.length,
+        itemCount: cart.items.length,
         amount: bill.toPay,
         totalAmount: bill.toPay,
         paymentMethod,
