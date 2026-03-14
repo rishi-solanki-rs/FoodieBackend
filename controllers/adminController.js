@@ -734,6 +734,13 @@ exports.updateMenuItemAdmin = async (req, res) => {
       product.basePrice = Number(updates.basePrice);
     if (updates.quantity !== undefined)
       product.quantity = String(updates.quantity).trim();
+    if (updates.unit !== undefined) {
+      const unit = String(updates.unit || "piece").trim();
+      const allowedUnits = ["kg", "gram", "litre", "ml", "piece", "packet", "dozen"];
+      if (allowedUnits.includes(unit)) {
+        product.unit = unit;
+      }
+    }
     if (updates.hsnCode !== undefined)
       product.hsnCode = String(updates.hsnCode).trim();
     if (updates.gstPercent !== undefined) {
@@ -758,6 +765,42 @@ exports.updateMenuItemAdmin = async (req, res) => {
     if (updates.variations !== undefined) product.variations = updates.variations;
     if (updates.addOns !== undefined) product.addOns = updates.addOns;
     if (updates.category !== undefined) product.category = updates.category;
+    if (updates.adminCommissionPercent !== undefined) {
+      if (updates.adminCommissionPercent === "" || updates.adminCommissionPercent === null) {
+        product.adminCommissionPercent = null;
+      } else {
+        const commission = Number(updates.adminCommissionPercent);
+        if (Number.isFinite(commission) && commission >= 0 && commission <= 100) {
+          product.adminCommissionPercent = commission;
+        }
+      }
+    }
+    if (updates.restaurantCommissionPercent !== undefined) {
+      if (updates.restaurantCommissionPercent === "" || updates.restaurantCommissionPercent === null) {
+        product.restaurantCommissionPercent = null;
+      } else {
+        const commission = Number(updates.restaurantCommissionPercent);
+        if (Number.isFinite(commission) && commission >= 0 && commission <= 100) {
+          product.restaurantCommissionPercent = commission;
+        }
+      }
+    }
+    if (updates.packagingCharge !== undefined) {
+      if (updates.packagingCharge === "" || updates.packagingCharge === null) {
+        product.packagingCharge = 0;
+      } else {
+        const charge = Number(updates.packagingCharge);
+        if (Number.isFinite(charge) && charge >= 0) {
+          product.packagingCharge = charge;
+        }
+      }
+    }
+    if (updates.packagingGstPercent !== undefined) {
+      const pGst = Number(updates.packagingGstPercent);
+      if ([0, 5, 12, 18].includes(pGst)) {
+        product.packagingGstPercent = pGst;
+      }
+    }
     if (updates.isApproved !== undefined) {
       const approvalState =
         typeof updates.isApproved === "string"
@@ -769,6 +812,35 @@ exports.updateMenuItemAdmin = async (req, res) => {
     if (updates.approvalNotes !== undefined) {
       product.approvalNotes = updates.approvalNotes;
     }
+
+    if (updates.restaurantDiscount !== undefined) {
+      const rdRaw = parseIfString(updates.restaurantDiscount);
+      if (!rdRaw || typeof rdRaw !== "object") {
+        return res.status(400).json({ message: "restaurantDiscount must be an object" });
+      }
+
+      const rdType = rdRaw.type === "flat" ? "flat" : "percent";
+      const rdValue = Number(rdRaw.value ?? 0);
+      const rdActive = rdRaw.active !== undefined
+        ? (rdRaw.active === true || rdRaw.active === "true")
+        : rdValue > 0;
+
+      if (!Number.isFinite(rdValue) || rdValue < 0) {
+        return res.status(400).json({ message: "restaurantDiscount.value must be a non-negative number" });
+      }
+      if (rdType === "percent" && rdValue > 100) {
+        return res.status(400).json({ message: "restaurantDiscount percent cannot exceed 100%" });
+      }
+
+      product.restaurantDiscount = {
+        type: rdType,
+        value: rdValue,
+        active: rdActive,
+        setAt: new Date(),
+        setBy: product.restaurantDiscount?.setBy || req.user?._id,
+      };
+    }
+
     if (product.pendingUpdate) {
       product.pendingUpdate = undefined;
       product.pendingUpdateAt = undefined;
@@ -820,6 +892,7 @@ exports.createMenuItemForRestaurant = async (req, res) => {
       restaurantCommissionPercent,
       packagingCharge,
       packagingGstPercent,
+      restaurantDiscount,
     } = req.body;
 
     const name = parseIfString(req.body.name);
@@ -936,6 +1009,34 @@ exports.createMenuItemForRestaurant = async (req, res) => {
         productData.packagingCharge = charge;
         productData.packagingGstPercent = finalPackagingGst;
       }
+    }
+
+    if (restaurantDiscount !== undefined && restaurantDiscount !== null) {
+      const rd = parseIfString(restaurantDiscount);
+      if (!rd || typeof rd !== "object") {
+        return res.status(400).json({ message: "restaurantDiscount must be an object" });
+      }
+
+      const rdType = rd.type === "flat" ? "flat" : "percent";
+      const rdValue = Number(rd.value ?? 0);
+      const rdActive = rd.active !== undefined
+        ? (rd.active === true || rd.active === "true")
+        : rdValue > 0;
+
+      if (!Number.isFinite(rdValue) || rdValue < 0) {
+        return res.status(400).json({ message: "restaurantDiscount.value must be a non-negative number" });
+      }
+      if (rdType === "percent" && rdValue > 100) {
+        return res.status(400).json({ message: "restaurantDiscount percent cannot exceed 100%" });
+      }
+
+      productData.restaurantDiscount = {
+        type: rdType,
+        value: rdValue,
+        active: rdActive,
+        setAt: new Date(),
+        setBy: req.user?._id,
+      };
     }
 
     const product = await Product.create(productData);
@@ -1071,6 +1172,12 @@ exports.getPendingMenusByRestaurant = async (req, res) => {
               quantity: "$quantity",
               hsnCode: "$hsnCode",
               gstPercent: "$gstPercent",
+              adminCommissionPercent: "$adminCommissionPercent",
+              restaurantCommissionPercent: "$restaurantCommissionPercent",
+              packagingCharge: "$packagingCharge",
+              packagingGstPercent: "$packagingGstPercent",
+              restaurantDiscount: "$restaurantDiscount",
+              adminDiscount: "$adminDiscount",
               variations: "$variations",
               addOns: "$addOns",
               pendingUpdate: "$pendingUpdate",

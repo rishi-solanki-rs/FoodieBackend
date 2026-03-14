@@ -58,12 +58,22 @@ const getOwnerRestaurant = async (userId) => {
 function computeDiscountFields(product) {
   const ad = product.adminDiscount;
   const rd = product.restaurantDiscount;
-  const adActive = ad && ad.active && ad.value > 0;
-  const rdActive = rd && rd.active && rd.value > 0;
+  const isDiscountActive = (discount) => {
+    if (!discount) return false;
+    const value = Number(discount.value || 0);
+    if (!Number.isFinite(value) || value <= 0) return false;
+
+    // Legacy records may not have `active`; treat value > 0 as active by default.
+    if (discount.active === undefined || discount.active === null) return true;
+    return discount.active === true || discount.active === 'true';
+  };
+
+  const adActive = isDiscountActive(ad);
+  const rdActive = isDiscountActive(rd);
 
   // Normalise to a comparable numeric value (for flat, use raw; for percent, use raw)
-  const adVal = adActive ? ad.value : 0;
-  const rdVal = rdActive ? rd.value : 0;
+  const adVal = adActive ? Number(ad.value) : 0;
+  const rdVal = rdActive ? Number(rd.value) : 0;
 
   let finalDiscount = 0;
   let finalDiscountType = 'percent';
