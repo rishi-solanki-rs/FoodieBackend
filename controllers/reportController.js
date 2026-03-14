@@ -226,7 +226,7 @@ exports.getOrderReport = async (req, res) => {
                     restaurantNet: order.paymentBreakdown?.restaurantNet ?? 0,
                     platformBillTotal: order.paymentBreakdown?.platformBillTotal ?? 0,
                     adminCommissionGst: order.paymentBreakdown?.adminCommissionGst ?? 0,
-                    gstOnPlatform: order.paymentBreakdown?.gstOnPlatform ?? 0,
+                    platformGST: order.paymentBreakdown?.platformGST ?? 0,
                 },
                 status: order.status,
                 paymentMethod: order.paymentMethod,
@@ -361,7 +361,7 @@ exports.getProfitLossReport = async (req, res) => {
             totalTip: reportsData.reduce((sum, o) => sum + (o.tip || 0), 0),
             totalTax: reportsData.reduce((sum, o) => sum + (o.tax || 0), 0),
             totalAdminCommissionGstLiability: orders.reduce((sum, o) => sum + (o.paymentBreakdown?.adminCommissionGst || 0), 0),
-            totalPlatformGstLiability: orders.reduce((sum, o) => sum + (o.paymentBreakdown?.gstOnPlatform || 0), 0)
+            totalPlatformGstLiability: orders.reduce((sum, o) => sum + (o.paymentBreakdown?.platformGST || 0), 0)
         };
         Object.keys(summary).forEach(key => {
             if (typeof summary[key] === 'number' && key !== 'totalOrdersDelivered') {
@@ -427,7 +427,7 @@ exports.getAdminSettlementReport = async (req, res) => {
                 restaurantNet: pb.restaurantNet ?? 0,
                 platformBillTotal: pb.platformBillTotal ?? 0,
                 adminCommissionGst: pb.adminCommissionGst ?? 0,
-                gstOnPlatform: pb.gstOnPlatform ?? 0,
+                platformGST: pb.platformGST ?? 0,
             };
         });
 
@@ -445,7 +445,7 @@ exports.getAdminSettlementReport = async (req, res) => {
             acc.restaurantNet += row.restaurantNet || 0;
             acc.platformBillTotal += row.platformBillTotal || 0;
             acc.adminCommissionGst += row.adminCommissionGst || 0;
-            acc.gstOnPlatform += row.gstOnPlatform || 0;
+            acc.platformGST += row.platformGST || 0;
             return acc;
         }, {
             itemTotal: 0,
@@ -461,7 +461,7 @@ exports.getAdminSettlementReport = async (req, res) => {
             restaurantNet: 0,
             platformBillTotal: 0,
             adminCommissionGst: 0,
-            gstOnPlatform: 0,
+            platformGST: 0,
         });
 
         Object.keys(summary).forEach((key) => {
@@ -469,9 +469,9 @@ exports.getAdminSettlementReport = async (req, res) => {
         });
 
         if (format === 'csv') {
-            let csv = 'orderId,createdAt,status,restaurant,customerName,itemTotal,restaurantDiscount,gstOnFood,packagingCharge,packagingGST,restaurantBillTotal,foodierDiscount,gstOnDiscount,finalPayableToRestaurant,customerRestaurantBill,restaurantNet,platformBillTotal,adminCommissionGst,gstOnPlatform\n';
+            let csv = 'orderId,createdAt,status,restaurant,customerName,itemTotal,restaurantDiscount,gstOnFood,packagingCharge,packagingGST,restaurantBillTotal,foodierDiscount,gstOnDiscount,finalPayableToRestaurant,customerRestaurantBill,restaurantNet,platformBillTotal,adminCommissionGst,platformGST\n';
             rows.forEach((r) => {
-                csv += `${r.orderId},${r.createdAt?.toISOString?.() || ''},${r.status || ''},"${r.restaurant}","${r.customerName}",${r.itemTotal},${r.restaurantDiscount},${r.gstOnFood},${r.packagingCharge},${r.packagingGST},${r.restaurantBillTotal},${r.foodierDiscount},${r.gstOnDiscount},${r.finalPayableToRestaurant},${r.customerRestaurantBill},${r.restaurantNet},${r.platformBillTotal},${r.adminCommissionGst},${r.gstOnPlatform}\n`;
+                csv += `${r.orderId},${r.createdAt?.toISOString?.() || ''},${r.status || ''},"${r.restaurant}","${r.customerName}",${r.itemTotal},${r.restaurantDiscount},${r.gstOnFood},${r.packagingCharge},${r.packagingGST},${r.restaurantBillTotal},${r.foodierDiscount},${r.gstOnDiscount},${r.finalPayableToRestaurant},${r.customerRestaurantBill},${r.restaurantNet},${r.platformBillTotal},${r.adminCommissionGst},${r.platformGST}\n`;
             });
             res.header('Content-Type', 'text/csv');
             res.header('Content-Disposition', `attachment; filename="admin-settlement-${Date.now()}.csv"`);

@@ -139,8 +139,8 @@ async function generateBills(orderId) {
     sgst:  r2(rawPackagingGst / 2),
   };
 
-  const platformGstTotal = r2(pb.platformGST ?? pb.gstOnPlatform ?? 0);
-  const deliveryGstTotal = r2(pb.deliveryGST ?? pb.deliveryGst ?? (deliveryCharge * ((pb.deliveryChargeGstPercent ?? gstRates.deliveryChargeGstPercent) / 100)));
+  const platformGstTotal = r2(pb.platformGST ?? 0);
+  const deliveryGstTotal = r2(pb.deliveryGST ?? (deliveryCharge * ((pb.deliveryChargeGstPercent ?? gstRates.deliveryChargeGstPercent) / 100)));
 
   // Platform fee GST (18% by default, admin-configurable)
   const gstOnPlatform = {

@@ -99,7 +99,7 @@ async function processSettlement(orderId, options = {}) {
       - (paymentBreakdown.adminCommissionGst || 0),
     );
     const adminCommissionGst = r2(paymentBreakdown.adminCommissionGst || 0);
-    const gstOnPlatform = r2(paymentBreakdown.gstOnPlatform || 0);
+    const platformGST = r2(paymentBreakdown.platformGST || 0);
 
     const riderDeliveryCharge = r2(order.riderEarnings?.deliveryCharge || 0);
     const riderPlatformFee = r2(order.riderEarnings?.platformFee || 0);
@@ -198,7 +198,7 @@ async function processSettlement(orderId, options = {}) {
           riderEarning: riderTotalEarning,
           adminCommission,
           adminCommissionGst,
-          gstOnPlatform,
+          platformGST,
         },
         note: `Settlement rider credit (${trigger})`,
         status: 'completed',
@@ -213,7 +213,7 @@ async function processSettlement(orderId, options = {}) {
           restaurantNet: restaurantEarning,
           adminCommission,
           adminCommissionGst,
-          gstOnPlatform,
+          platformGST,
         },
         note: `Settlement restaurant credit (${trigger})`,
         status: 'completed',
@@ -231,8 +231,8 @@ async function processSettlement(orderId, options = {}) {
           restaurantNet: restaurantEarning,
           riderEarning: riderTotalEarning,
           adminCommissionGst,
-          gstOnPlatform,
-          adminGstLiability: r2(adminCommissionGst + gstOnPlatform),
+          platformGST,
+          adminGstLiability: r2(adminCommissionGst + platformGST),
         },
         note: `Settlement ledger snapshot (${trigger})`,
         status: 'completed',
@@ -269,8 +269,8 @@ async function processSettlement(orderId, options = {}) {
       admin: {
         adminCommission,
         adminCommissionGst,
-        gstOnPlatform,
-        adminGstLiability: r2(adminCommissionGst + gstOnPlatform),
+        platformGST,
+        adminGstLiability: r2(adminCommissionGst + platformGST),
       },
     };
   } catch (error) {

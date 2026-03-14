@@ -385,7 +385,7 @@ async function calculateOrderPrice({
       adminCommissionGstPercent: adminSettings.adminCommissionGstPercent,
     });
 
-    const gstTotalForOrder = round(settlement.gstOnFood + settlement.packagingGST + settlement.deliveryGst + settlement.gstOnPlatform);
+    const gstTotalForOrder = round(settlement.gstOnFood + settlement.packagingGST + settlement.deliveryGST + settlement.platformGST);
 
     // 7. Grand total = restaurant bill (post-discount) + platform bill (post-discount) + tip
     let totalAmount = settlement.finalPayableToRestaurant + settlement.platformBillTotal + smallCartFee + round(tip);

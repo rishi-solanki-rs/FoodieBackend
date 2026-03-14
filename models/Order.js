@@ -31,15 +31,13 @@ function normalizePaymentBreakdown(pb) {
   pb.cgstOnPackaging = packagingSplit.cgst;
   pb.sgstOnPackaging = packagingSplit.sgst;
 
-  pb.deliveryGST = roundMoney(pb.deliveryGST ?? pb.deliveryGst ?? 0);
-  pb.deliveryGst = pb.deliveryGST;
-  const deliverySplit = splitGst(pb.deliveryGst || 0);
+  pb.deliveryGST = roundMoney(pb.deliveryGST || 0);
+  const deliverySplit = splitGst(pb.deliveryGST || 0);
   pb.cgstDelivery = deliverySplit.cgst;
   pb.sgstDelivery = deliverySplit.sgst;
 
-  pb.platformGST = roundMoney(pb.platformGST ?? pb.gstOnPlatform ?? 0);
-  pb.gstOnPlatform = pb.platformGST;
-  const platformSplit = splitGst(pb.gstOnPlatform || 0);
+  pb.platformGST = roundMoney(pb.platformGST || 0);
+  const platformSplit = splitGst(pb.platformGST || 0);
   pb.cgstPlatform = platformSplit.cgst;
   pb.sgstPlatform = platformSplit.sgst;
 
@@ -50,8 +48,8 @@ function normalizePaymentBreakdown(pb) {
   pb.totalGstCollected = roundMoney(
     (pb.gstOnFood || 0)
     + (pb.packagingGST || 0)
-    + (pb.deliveryGst || 0)
-    + (pb.gstOnPlatform || 0)
+    + (pb.deliveryGST || 0)
+    + (pb.platformGST || 0)
     + (pb.adminCommissionGst || 0),
   );
 
@@ -75,8 +73,8 @@ function normalizePaymentBreakdown(pb) {
     ...existingSummary,
     foodGst: roundMoney(pb.gstOnFood || 0),
     packagingGst: roundMoney(pb.packagingGST || 0),
-    deliveryGst: roundMoney(pb.deliveryGst || 0),
-    platformGst: roundMoney(pb.gstOnPlatform || 0),
+    deliveryGST: roundMoney(pb.deliveryGST || 0),
+    platformGST: roundMoney(pb.platformGST || 0),
     adminCommissionGst: roundMoney(pb.adminCommissionGst || 0),
     cgstTotal,
     sgstTotal,
@@ -172,13 +170,10 @@ const orderSchema = new mongoose.Schema(
       // Platform bill section (invoice v2)
       deliveryCharge: { type: Number, default: 0 },
       deliveryGST: { type: Number, default: 0 },
-      deliveryGst: { type: Number, default: 0 },
       cgstDelivery: { type: Number, default: 0 },
       sgstDelivery: { type: Number, default: 0 },
       deliveryChargeGstPercent: { type: Number, default: 18 },
-      taxablePlatformAmount: { type: Number, default: 0 },
       platformGST: { type: Number, default: 0 },
-      gstOnPlatform: { type: Number, default: 0 },
       cgstPlatform: { type: Number, default: 0 },
       sgstPlatform: { type: Number, default: 0 },
       platformBillTotal: { type: Number, default: 0 },
@@ -191,7 +186,7 @@ const orderSchema = new mongoose.Schema(
       riderDeliveryEarning: { type: Number, default: 0 },   // delivery fee credited to rider
       riderIncentive: { type: Number, default: 0 },         // incentive bonus credited to rider
       riderPlatformFeeShare: { type: Number, default: 0 },  // platform fee portion to rider (pre-GST)
-      adminPlatformFeeShare: { type: Number, default: 0 },  // = gstOnPlatform: GST on platform fee → admin wallet
+      adminPlatformFeeShare: { type: Number, default: 0 },  // = platformGST: GST on platform fee → admin wallet
       // Admin commission GST (invoice v2) — GST on restaurant commission, deducted from restaurant earnings
       adminCommissionGst: { type: Number, default: 0 },            // adminCommission × 18%
       cgstAdminCommission: { type: Number, default: 0 },
@@ -202,8 +197,8 @@ const orderSchema = new mongoose.Schema(
       totalGstBreakdownForAdmin: {
         foodGst: { type: Number, default: 0 },
         packagingGst: { type: Number, default: 0 },
-        deliveryGst: { type: Number, default: 0 },
-        platformGst: { type: Number, default: 0 },
+        deliveryGST: { type: Number, default: 0 },
+        platformGST: { type: Number, default: 0 },
         adminCommissionGst: { type: Number, default: 0 },
         cgstTotal: { type: Number, default: 0 },
         sgstTotal: { type: Number, default: 0 },
@@ -371,6 +366,9 @@ orderSchema.index({ status: 1, restaurant: 1 });
 
 orderSchema.pre('validate', function normalizeFinancialSnapshot() {
   normalizePaymentBreakdown(this.paymentBreakdown);
+  if (this.paymentBreakdown && typeof this.paymentBreakdown === 'object') {
+    this.tax = roundMoney(this.paymentBreakdown.totalGstCollected || 0);
+  }
 });
 
 module.exports = mongoose.model("Order", orderSchema);

@@ -67,13 +67,13 @@ function validateOrderFinancialIntegrity(orderLike) {
   }
 
   // 3c) Delivery GST split integrity
-  if (!nearlyEqual((pb.cgstDelivery || 0) + (pb.sgstDelivery || 0), pb.deliveryGst || 0)) {
-    issues.push('delivery GST split mismatch: cgstDelivery + sgstDelivery != deliveryGst');
+  if (!nearlyEqual((pb.cgstDelivery || 0) + (pb.sgstDelivery || 0), pb.deliveryGST || 0)) {
+    issues.push('delivery GST split mismatch: cgstDelivery + sgstDelivery != deliveryGST');
   }
 
   // 3d) Platform GST split integrity
-  if (!nearlyEqual((pb.cgstPlatform || 0) + (pb.sgstPlatform || 0), pb.gstOnPlatform || 0)) {
-    issues.push('platform GST split mismatch: cgstPlatform + sgstPlatform != gstOnPlatform');
+  if (!nearlyEqual((pb.cgstPlatform || 0) + (pb.sgstPlatform || 0), pb.platformGST || 0)) {
+    issues.push('platform GST split mismatch: cgstPlatform + sgstPlatform != platformGST');
   }
 
   // 3e) Admin commission GST split integrity
@@ -85,12 +85,17 @@ function validateOrderFinancialIntegrity(orderLike) {
   const totalGstExpected = r2(
     (pb.gstOnFood || 0)
       + (pb.packagingGST || 0)
-      + (pb.deliveryGst || 0)
-      + (pb.gstOnPlatform || 0)
+      + (pb.deliveryGST || 0)
+      + (pb.platformGST || 0)
       + (pb.adminCommissionGst || 0),
   );
   if (!nearlyEqual(pb.totalGstCollected || 0, totalGstExpected)) {
-    issues.push('totalGstCollected mismatch: gstOnFood + packagingGST + deliveryGst + gstOnPlatform + adminCommissionGst');
+    issues.push('totalGstCollected mismatch: gstOnFood + packagingGST + deliveryGST + platformGST + adminCommissionGst');
+  }
+
+  // 3h) root tax should mirror totalGstCollected
+  if (!nearlyEqual(order.tax || 0, pb.totalGstCollected || 0)) {
+    issues.push('root tax mismatch: order.tax must equal paymentBreakdown.totalGstCollected');
   }
 
   // 3g) Admin GST summary split integrity
@@ -122,13 +127,13 @@ function validateOrderFinancialIntegrity(orderLike) {
   // 4) Platform bill integrity
   const platformBillExpected = r2(
     (pb.deliveryFee || 0)
-      + (pb.deliveryGst || 0)
+      + (pb.deliveryGST || 0)
       + (pb.platformFee || 0)
-      + (pb.gstOnPlatform || 0)
+      + (pb.platformGST || 0)
       - (pb.platformDiscountUsed || 0),
   );
   if (!nearlyEqual(pb.platformBillTotal || 0, platformBillExpected)) {
-    issues.push('platformBillTotal mismatch: deliveryFee + deliveryGst + platformFee + gstOnPlatform - platformDiscountUsed');
+    issues.push('platformBillTotal mismatch: deliveryFee + deliveryGST + platformFee + platformGST - platformDiscountUsed');
   }
 
   // 5) Discount distribution integrity
