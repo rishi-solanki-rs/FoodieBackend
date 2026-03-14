@@ -113,6 +113,7 @@ function calculateSettlementBreakdown({
     0,
     taxableAmountFood + safePackagingCharge - safeAdminCommissionAmount - adminCommissionGst,
   ));
+  const restaurantGross = round(taxableAmountFood + safePackagingCharge);
   const restaurantNetEarning = restaurantNet;
   const customerRestaurantBill = finalPayableToRestaurant;
 
@@ -160,6 +161,7 @@ function calculateSettlementBreakdown({
     sgstAdminCommission,
     totalGstCollected,
     totalGstBreakdownForAdmin,
+    restaurantGross,
     restaurantNet,
     restaurantNetEarning,
     customerRestaurantBill,

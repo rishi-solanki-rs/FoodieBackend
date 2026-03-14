@@ -397,7 +397,9 @@ exports.placeOrder = async (req, res) => {
     canonicalSettlement.restaurantNet = restaurantEarningSum;
     canonicalSettlement.restaurantNetEarning = restaurantEarningSum;
     canonicalSettlement.customerRestaurantBill = canonicalSettlement.finalPayableToRestaurant;
-    canonicalSettlement.restaurantGross = toMoney((bill.itemTotal || 0) + (bill.packaging || 0));
+    canonicalSettlement.restaurantGross = toMoney(
+      (canonicalSettlement.priceAfterRestaurantDiscount || 0) + (bill.packaging || 0),
+    );
     canonicalSettlement.totalAdminCommissionDeduction = toMoney(adminCommission + adminCommissionGstTotal);
 
     // ── Rider Earnings ───────────────────────────────────────────────────────
@@ -508,7 +510,7 @@ exports.placeOrder = async (req, res) => {
         riderTip: riderTipAmount,
         riderPlatformFeeShare,
         adminPlatformFeeShare,
-        computedVersion: "settlement-v2",
+        computedVersion: canonicalSettlement.computedVersion || "settlement-v3",
         computedAt: new Date(),
       },
       // Structured rider earnings (single source of truth)
@@ -3148,11 +3150,12 @@ const buildBillingSectionsFromOrder = (orderLike) => {
   const commissionAmount = asAmount(
     (pb.totalAdminCommissionDeduction ?? 0) - (pb.adminCommissionGst ?? 0),
   );
-  const commissionPercent = itemsTotal > 0 ? asAmount((commissionAmount / itemsTotal) * 100) : 0;
+  const commissionBase = asAmount(pb.priceAfterRestaurantDiscount ?? pb.taxableAmountFood ?? (itemsTotal - restaurantDiscount));
+  const commissionPercent = commissionBase > 0 ? asAmount((commissionAmount / commissionBase) * 100) : 0;
   const commissionGst = asAmount(pb.adminCommissionGst ?? 0);
   const commissionGstSplit = splitGst(commissionGst);
 
-  const restaurantGross = asAmount(pb.restaurantGross ?? (itemsTotal + packagingCharge));
+  const restaurantGross = asAmount(pb.restaurantGross ?? (commissionBase + packagingCharge));
   const netEarning = asAmount(pb.restaurantNet ?? 0);
 
   const riderDeliveryCharge = asAmount(rider.deliveryCharge ?? 0);

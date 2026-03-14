@@ -5,8 +5,10 @@
  * Shows what the restaurant is owed after the platform deducts its commission.
  *
  * Earnings formula:
- *   restaurantNetEarning = (itemsTotal + packagingCharge)
+ *   restaurantGross = (discountedFoodBase + packagingCharge)
+ *   restaurantNetEarning = restaurantGross
  *                          - adminCommissionAmount
+ *                          - gstOnAdminCommission.total
  *
  * Generated once per order by billingService.generateBills() on delivery.
  */
@@ -27,7 +29,7 @@ const restaurantBillSchema = new mongoose.Schema(
     customer:   { type: mongoose.Schema.Types.ObjectId, ref: 'User',       required: true },
 
     // ── Food ─────────────────────────────────────────────────────────────────
-    itemsTotal:         { type: Number, default: 0 }, // Sum of item prices (pre-GST, what customer paid for food)
+    itemsTotal:         { type: Number, default: 0 }, // Food total before restaurant discount (pre-GST)
     gstOnFood:          { type: gstBreakdownSchema, default: () => ({}) }, // GST collected on food (passed through)
     restaurantDiscount: { type: Number, default: 0 }, // Discount borne by restaurant (if any)
 
@@ -42,7 +44,7 @@ const restaurantBillSchema = new mongoose.Schema(
     gstOnAdminCommission:   { type: gstBreakdownSchema, default: () => ({}) },
 
     // ── Net ───────────────────────────────────────────────────────────────────
-    restaurantNetEarning: { type: Number, default: 0 }, // (items + packaging) - commission
+    restaurantNetEarning: { type: Number, default: 0 }, // (discounted food + packaging) - commission - commission GST
 
     generatedAt: { type: Date, default: Date.now },
   },

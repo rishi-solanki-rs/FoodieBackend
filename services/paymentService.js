@@ -347,7 +347,7 @@ function getSettlementSnapshot(order, restaurant, distanceInfo) {
     : Math.round((Math.max(0, Number(paymentBreakdown?.priceAfterRestaurantDiscount ?? paymentBreakdown?.taxableAmountFood ?? itemTotal)) * (Math.max(0, commissionPercent) / 100)) * 100) / 100;
 
   // ── Restaurant net earning ────────────────────────────────────────────────
-  // Formula: (itemTotal + packaging) - adminCommission
+  // Formula: (discountedFoodBase + packaging) - adminCommission - adminCommissionGst
   // GST, deliveryFee, and platformFee are NOT restaurant earnings
   const taxableFoodBase = Number(paymentBreakdown?.priceAfterRestaurantDiscount ?? paymentBreakdown?.taxableAmountFood ?? itemTotal);
   const restaurantGross = taxableFoodBase + packagingCharge;

@@ -80,6 +80,7 @@ async function generateBills(orderId) {
 
   // Raw amounts from order (set at order-creation time by priceCalculator)
   const itemsTotal         = r2(pb.itemTotal           ?? order.itemTotal     ?? 0);
+  const priceAfterRestaurantDiscount = r2(pb.priceAfterRestaurantDiscount ?? pb.taxableAmountFood ?? (itemsTotal - (pb.restaurantDiscount ?? 0)));
   const restaurantDiscount = r2(pb.restaurantDiscount  ?? 0);
   const platformDiscount   = r2(pb.foodierDiscount     ?? order.discount      ?? 0);
   const discountTotal      = r2(restaurantDiscount + platformDiscount);
@@ -95,12 +96,15 @@ async function generateBills(orderId) {
     (pb.totalAdminCommissionDeduction ?? 0) - (pb.adminCommissionGst ?? 0),
   );
   const adminCommissionPercent = (() => {
-    if (Number.isFinite(Number(adminCommissionAmount)) && itemsTotal > 0) {
+    if (Number.isFinite(Number(adminCommissionAmount)) && priceAfterRestaurantDiscount > 0) {
       // Back-calculate or use the stored item-level first commission percent
       const sumItemPercent = Array.isArray(order.items)
         ? order.items.reduce((s, i) => s + (Number(i.commissionPercent) || 0), 0)
         : 0;
-      return r2(sumItemPercent / Math.max(order.items?.length || 1, 1));
+      if (sumItemPercent > 0) {
+        return r2(sumItemPercent / Math.max(order.items?.length || 1, 1));
+      }
+      return r2((adminCommissionAmount / priceAfterRestaurantDiscount) * 100);
     }
     return 0;
   })();
@@ -115,10 +119,10 @@ async function generateBills(orderId) {
 
   // Food GST: use stored value and split CGST/SGST
   const gstOnFood = {
-    percent: rawGstOnFood > 0 && itemsTotal > 0
-      ? r2((rawGstOnFood / itemsTotal) * 100)
+    percent: rawGstOnFood > 0 && priceAfterRestaurantDiscount > 0
+      ? r2((rawGstOnFood / priceAfterRestaurantDiscount) * 100)
       : 0,
-    base:  r2(itemsTotal - restaurantDiscount),
+    base:  priceAfterRestaurantDiscount,
     total: rawGstOnFood,
     cgst:  r2(rawGstOnFood / 2),
     sgst:  r2(rawGstOnFood / 2),

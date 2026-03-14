@@ -180,7 +180,7 @@ const orderSchema = new mongoose.Schema(
       platformDiscountUsed: { type: Number, default: 0 },
       restaurantDiscountUsed: { type: Number, default: 0 },
       // Settlement clarity fields (v2)
-      restaurantGross: { type: Number, default: 0 },        // itemTotal + packaging (for audit trail)
+      restaurantGross: { type: Number, default: 0 },        // priceAfterRestaurantDiscount + packaging (for audit trail)
       restaurantNet: { type: Number, default: 0 },          // alias for restaurantNetEarning
       riderDeliveryEarning: { type: Number, default: 0 },   // delivery fee credited to rider
       riderIncentive: { type: Number, default: 0 },         // incentive bonus credited to rider
