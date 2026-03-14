@@ -102,10 +102,20 @@ exports.formatProductForUser = (product) => {
 
   const ad = product.adminDiscount;
   const rd = product.restaurantDiscount;
-  const adActive = ad && ad.active && ad.value > 0;
-  const rdActive = rd && rd.active && rd.value > 0;
-  const adVal = adActive ? ad.value : 0;
-  const rdVal = rdActive ? rd.value : 0;
+  const isDiscountActive = (discount) => {
+    if (!discount) return false;
+    const value = Number(discount.value || 0);
+    if (!Number.isFinite(value) || value <= 0) return false;
+
+    // Legacy records may not have `active`; treat value > 0 as active by default.
+    if (discount.active === undefined || discount.active === null) return true;
+    return discount.active === true || discount.active === 'true';
+  };
+
+  const adActive = isDiscountActive(ad);
+  const rdActive = isDiscountActive(rd);
+  const adVal = adActive ? Number(ad.value) : 0;
+  const rdVal = rdActive ? Number(rd.value) : 0;
 
   let finalDiscount = 0;
   let finalDiscountType = 'percent';
@@ -206,21 +216,9 @@ exports.formatCityForUser = (city) => {
   return {
     _id: city._id,
     name: city.name,
-    const isDiscountActive = (discount) => {
-      if (!discount) return false;
-      const value = Number(discount.value || 0);
-      if (!Number.isFinite(value) || value <= 0) return false;
-
-      // Legacy records may not have `active`; treat value > 0 as active by default.
-      if (discount.active === undefined || discount.active === null) return true;
-      return discount.active === true || discount.active === 'true';
-    };
-
-    const adActive = isDiscountActive(ad);
-    const rdActive = isDiscountActive(rd);
+    zones: (city.zones || []).map((zone) => ({
       _id: zone._id,
-    const adVal = adActive ? Number(ad.value) : 0;
-    const rdVal = rdActive ? Number(rd.value) : 0;
+      name: zone.name,
       polygon: zone.polygon,
     })),
   };
