@@ -376,9 +376,8 @@ orderSchema.index({ restaurant: 1 });
 orderSchema.index({ paymentStatus: 1 });
 orderSchema.index({ status: 1, restaurant: 1 });
 
-orderSchema.pre('validate', function normalizeFinancialSnapshot(next) {
+orderSchema.pre('validate', function normalizeFinancialSnapshot() {
   normalizePaymentBreakdown(this.paymentBreakdown);
-  next();
 });
 
 module.exports = mongoose.model("Order", orderSchema);
