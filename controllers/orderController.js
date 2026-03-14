@@ -309,8 +309,16 @@ exports.placeOrder = async (req, res) => {
       const commissionPercent = Number.isFinite(Number(calculatedItem.commissionPercent))
         ? Number(calculatedItem.commissionPercent)
         : defaultCommissionPercent;
-      const itemAdminCommission = toMoney(lineTotal * (commissionPercent / 100));
-      const itemAdminCommissionGst = toMoney(itemAdminCommission * (adminCommissionGstPercent / 100));
+      const itemAdminCommission = toMoney(
+        Number(calculatedItem.adminCommissionAmount) || (lineTotal * (commissionPercent / 100)),
+      );
+      const itemAdminCommissionGst = toMoney(
+        Number(calculatedItem.adminCommissionGstAmount) || (itemAdminCommission * (adminCommissionGstPercent / 100)),
+      );
+      const itemPackagingTotal = toMoney(
+        Number(calculatedItem.packagingTotal)
+        || ((Number(calculatedItem.unitPackagingCharge) || 0) * (Number(item.quantity) || 0)),
+      );
 
       const itemGstPercent = Number(calculatedItem.gstPercent ?? item.gstPercent ?? 0);
       const itemGstAmount = toMoney(Number(calculatedItem.itemGstAmount) || (lineTotal * (itemGstPercent / 100)));
@@ -318,7 +326,10 @@ exports.placeOrder = async (req, res) => {
       const itemSgst = toMoney(Number(calculatedItem.sgst) || (itemGstAmount - itemCgst));
       const itemRestaurantEarning = Math.max(
         0,
-        toMoney(lineTotal - itemAdminCommission - itemAdminCommissionGst),
+        toMoney(
+          Number(calculatedItem.restaurantNetEarningAmount)
+          || (lineTotal + itemPackagingTotal - itemAdminCommission - itemAdminCommissionGst),
+        ),
       );
 
       adminCommission += itemAdminCommission;
@@ -374,7 +385,7 @@ exports.placeOrder = async (req, res) => {
     canonicalSettlement.restaurantNet = restaurantEarningSum;
     canonicalSettlement.restaurantNetEarning = restaurantEarningSum;
     canonicalSettlement.customerRestaurantBill = canonicalSettlement.finalPayableToRestaurant;
-    canonicalSettlement.restaurantGross = toMoney(bill.itemTotal || 0);
+    canonicalSettlement.restaurantGross = toMoney((bill.itemTotal || 0) + (bill.packaging || 0));
     canonicalSettlement.totalAdminCommissionDeduction = toMoney(adminCommission + adminCommissionGstTotal);
 
     // ── Rider Earnings ───────────────────────────────────────────────────────

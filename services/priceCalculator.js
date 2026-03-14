@@ -114,6 +114,11 @@ function normalizePricingItem({ item, product, adminSettings }) {
     adminSettings?.payoutConfig?.defaultRestaurantCommissionPercent ?? 0,
   );
   const adminCommissionAmount = round(lineTotal * (commissionPercent / 100));
+  const adminCommissionGstPercent = toNonNegativeNumber(adminSettings?.adminCommissionGstPercent, 18);
+  const adminCommissionGstAmount = round(adminCommissionAmount * (adminCommissionGstPercent / 100));
+  const restaurantNetEarningAmount = round(
+    Math.max(0, lineTotal + packagingTotal - adminCommissionAmount - adminCommissionGstAmount),
+  );
 
   return {
     productId: item?.product ? String(item.product) : null,
@@ -133,6 +138,8 @@ function normalizePricingItem({ item, product, adminSettings }) {
     packagingGstAmount,
     commissionPercent,
     adminCommissionAmount,
+    adminCommissionGstAmount,
+    restaurantNetEarningAmount,
   };
 }
 

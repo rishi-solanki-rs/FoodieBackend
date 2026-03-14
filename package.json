@@ -5,7 +5,8 @@
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "node Server.js"
+    "start": "node Server.js",
+    "test:settlement-earning": "node test_settlement_restaurant_earning.js"
   },
   "keywords": [],
   "author": "",

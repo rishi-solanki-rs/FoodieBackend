@@ -87,8 +87,7 @@ function calculateSettlementBreakdown({
 
   // ── Canonical settlement fields ───────────────────────────────────────────
   // Business rule:
-  // restaurantNet = lineTotal - adminCommission - restaurantGST - adminCommissionGST
-  // (lineTotal at order level maps to taxableAmountFood after restaurant discount)
+  // restaurantNet = taxableFood + packagingCharge - adminCommission - adminCommissionGST
   const safeAdminCommissionAmount = round(Math.max(0, adminCommissionAmount));
   const adminCommissionGst = round(
     safeAdminCommissionAmount * (Math.max(0, adminCommissionGstPercent) / 100),
@@ -118,7 +117,7 @@ function calculateSettlementBreakdown({
 
   const restaurantNet = round(Math.max(
     0,
-    taxableAmountFood - safeAdminCommissionAmount - adminCommissionGst,
+    taxableAmountFood + safePackagingCharge - safeAdminCommissionAmount - adminCommissionGst,
   ));
   const restaurantNetEarning = restaurantNet;
   const customerRestaurantBill = finalPayableToRestaurant;

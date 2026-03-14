@@ -131,6 +131,9 @@ function validateOrderFinancialIntegrity(orderLike) {
     if (!nearlyEqual(pb.restaurantNet || 0, itemRestaurantSum)) {
       issues.push('restaurant earning mismatch: sum(items.restaurantEarningAmount) != paymentBreakdown.restaurantNet');
     }
+    if (!nearlyEqual(pb.restaurantNetEarning || 0, itemRestaurantSum)) {
+      issues.push('restaurant earning mismatch: sum(items.restaurantEarningAmount) != paymentBreakdown.restaurantNetEarning');
+    }
   }
 
   // 8) Canonical payment breakdown consistency
@@ -140,7 +143,8 @@ function validateOrderFinancialIntegrity(orderLike) {
 
   // 9) Restaurant net formula integrity
   const expectedRestaurantNet = r2(
-    (pb.restaurantGross ?? order.itemTotal ?? 0)
+    (pb.taxableAmountFood ?? pb.itemTotal ?? order.itemTotal ?? 0)
+    + (pb.packagingCharge ?? order.packaging ?? 0)
     - adminCommission
     - (pb.adminCommissionGst || 0),
   );
