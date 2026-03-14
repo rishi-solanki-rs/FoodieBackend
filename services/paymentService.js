@@ -337,14 +337,11 @@ function getSettlementSnapshot(order, restaurant, distanceInfo) {
     : Number(order?.packaging || 0);
 
   // ── Admin commission ──────────────────────────────────────────────────────
-  // Prefer the canonical snapshot field set at order placement.
-  // Fallback chain: adminCommissionAtOrder → adminCommission → recalculate
+  // Canonical source is paymentBreakdown total deduction minus commission GST.
   const commissionPercent = Number(restaurant?.adminCommission || DEFAULT_COMMISSION_PERCENT);
-  const commissionAmount = Number.isFinite(Number(order?.adminCommissionAtOrder))
-    ? Number(order.adminCommissionAtOrder)
-    : Number.isFinite(Number(order?.adminCommission))
-      ? Number(order.adminCommission)
-      : Math.round((Math.max(0, itemTotal + packagingCharge) * (Math.max(0, commissionPercent) / 100)) * 100) / 100;
+  const commissionAmount = Number.isFinite(Number(paymentBreakdown?.totalAdminCommissionDeduction))
+    ? Number(paymentBreakdown.totalAdminCommissionDeduction) - Number(paymentBreakdown.adminCommissionGst || 0)
+    : Math.round((Math.max(0, itemTotal + packagingCharge) * (Math.max(0, commissionPercent) / 100)) * 100) / 100;
 
   // ── Restaurant net earning ────────────────────────────────────────────────
   // Formula: (itemTotal + packaging) - adminCommission
@@ -358,12 +355,10 @@ function getSettlementSnapshot(order, restaurant, distanceInfo) {
     : Number(distanceInfo?.totalDeliveryFee || 0);
 
   // ── Rider incentive ───────────────────────────────────────────────────────
-  // Prefer the structured riderEarnings object, fallback to legacy field
+  // Structured riderEarnings object is the canonical source
   const riderIncentive = Number.isFinite(Number(order?.riderEarnings?.incentive))
     ? Number(order.riderEarnings.incentive)
-    : Number.isFinite(Number(order?.riderIncentive))
-      ? Number(order.riderIncentive)
-      : 0;
+    : 0;
 
   // ── Platform fee distribution ─────────────────────────────────────────────
   // By default rider receives 100% of the platform fee.
@@ -556,14 +551,6 @@ async function processCODDelivery(orderId) {
 
       fullOrder.cashCollected = orderAmount;
       fullOrder.cashCollectedAt = new Date();
-      // Canonical fields (v2)
-      fullOrder.restaurantEarning = restaurantNet;
-      fullOrder.adminCommissionAtOrder = commissionAmount;
-      // Legacy fields (backward compat)
-      fullOrder.riderEarning = riderEarning;
-      fullOrder.riderIncentive = riderIncentive;
-      fullOrder.adminCommission = commissionAmount;
-      fullOrder.restaurantCommission = restaurantNet;
       // Update structured riderEarnings object with settlement-confirmed values
       fullOrder.riderEarnings = {
         deliveryCharge: settlementDeliveryFee,
@@ -806,14 +793,6 @@ async function processOnlineDelivery(orderId) {
       adminWallet.lastUpdated = new Date();
       await adminWallet.save({ session });
 
-      // Canonical fields (v2)
-      fullOrder.restaurantEarning = restaurantNet;
-      fullOrder.adminCommissionAtOrder = commissionAmount;
-      // Legacy fields (backward compat)
-      fullOrder.riderEarning = riderEarning;
-      fullOrder.riderIncentive = riderIncentive;
-      fullOrder.adminCommission = commissionAmount;
-      fullOrder.restaurantCommission = restaurantNet;
       // Update structured riderEarnings object with settlement-confirmed values
       fullOrder.riderEarnings = {
         deliveryCharge: settlementDeliveryFee,

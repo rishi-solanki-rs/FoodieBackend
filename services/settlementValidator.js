@@ -8,12 +8,11 @@
  * scripts and audit tooling — NOT called in the hot payment path.
  *
  * Formula reference (canonical):
- *   restaurantNet    = itemTotal − adminCommission − gstOnFood − adminCommissionGst
+ *   restaurantNet    = restaurantGross − adminCommission − adminCommissionGst
  *   riderEarning     = deliveryCharge + platformFee + incentive
  */
 
 const Order = require('../models/Order');
-const Restaurant = require('../models/Restaurant');
 
 const TOLERANCE = 0.02; // ±₹0.02 rounding tolerance
 
@@ -51,7 +50,7 @@ async function validateSettlement(orderId) {
   // ── Source values ──────────────────────────────────────────────────────────
   const itemTotal = Number(pb.itemTotal || order.itemTotal || 0);
   const gstOnFood = Number(pb.gstOnFood || 0);
-  const adminCommission = Number(order.adminCommission || 0);
+  const adminCommission = Number((pb.totalAdminCommissionDeduction || 0) - (pb.adminCommissionGst || 0));
   const adminCommissionGst = Number(pb.adminCommissionGst || 0);
 
   const deliveryCharge = Number(order.riderEarnings?.deliveryCharge || 0);
@@ -60,12 +59,12 @@ async function validateSettlement(orderId) {
   const riderTip = Number((order.riderEarnings?.tip ?? order.tip) || 0);
 
   // ── Expected values ────────────────────────────────────────────────────────
-  const expectedRestaurantNet = Math.max(0, Math.round((itemTotal - adminCommission - adminCommissionGst) * 100) / 100);
+  const expectedRestaurantNet = Math.max(0, Math.round(((pb.restaurantGross || itemTotal) - adminCommission - adminCommissionGst) * 100) / 100);
   const expectedRiderEarning = Math.max(0, Math.round((deliveryCharge + platformFee + riderIncentive + riderTip) * 100) / 100);
 
   // ── Stored values ──────────────────────────────────────────────────────────
-  const storedRestaurantNet = Number(order.restaurantEarning || 0);
-  const storedAdminCommission = Number(order.adminCommission || 0);
+  const storedRestaurantNet = Number(pb.restaurantNet || 0);
+  const storedAdminCommission = Number(adminCommission || 0);
   const storedRiderBaseEarning = Number(order.riderEarnings?.totalRiderEarning || 0);
 
   // ── Checks ─────────────────────────────────────────────────────────────────
@@ -87,15 +86,16 @@ async function validateSettlement(orderId) {
     );
   }
 
-  // 3. Consistency: paymentBreakdown.restaurantNet must match order.restaurantEarning
+  // 3. Consistency: paymentBreakdown restaurant net aliases should match
   const pbRestaurantNet = Number(order.paymentBreakdown?.restaurantNet ?? storedRestaurantNet);
-  if (!nearlyEqual(pbRestaurantNet, storedRestaurantNet)) {
+  const pbRestaurantNetAlias = Number(order.paymentBreakdown?.restaurantNetEarning ?? storedRestaurantNet);
+  if (!nearlyEqual(pbRestaurantNet, pbRestaurantNetAlias)) {
     issues.push(
-      `paymentBreakdown.restaurantNet mismatch: pb=${pbRestaurantNet.toFixed(2)}, order=${storedRestaurantNet.toFixed(2)}`
+      `paymentBreakdown.restaurantNet mismatch: restaurantNet=${pbRestaurantNet.toFixed(2)}, restaurantNetEarning=${pbRestaurantNetAlias.toFixed(2)}`
     );
   }
 
-  // 4. Item-level aggregation should match order.restaurantEarning
+  // 4. Item-level aggregation should match paymentBreakdown.restaurantNet
   const itemRestaurantSum = Array.isArray(order.items)
     ? Math.round(order.items.reduce((sum, item) => sum + (Number(item.restaurantEarningAmount || 0)), 0) * 100) / 100
     : 0;

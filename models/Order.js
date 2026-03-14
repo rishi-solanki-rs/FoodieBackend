@@ -109,7 +109,6 @@ const orderSchema = new mongoose.Schema(
         cgst: { type: Number, default: 0 },
         sgst: { type: Number, default: 0 },
         packagingCharge: { type: Number, default: 0 },
-        packagingTotal: { type: Number, default: 0 },
         packagingGstPercent: { type: Number, default: 0 },
         packagingGstAmount: { type: Number, default: 0 },
         commissionPercent: { type: Number, default: 0 },
@@ -304,29 +303,6 @@ const orderSchema = new mongoose.Schema(
       // Timestamp when earnings were calculated and credited
       earnedAt: { type: Date }
     },
-    
-    // ── Canonical settlement fields (v2) ─────────────────────────────────────
-    // Single source of truth for restaurant net earning:
-    //   Σ items[].restaurantEarningAmount = itemTotal − adminCommission
-    restaurantEarning: { type: Number, default: 0 },
-
-    // Admin commission collected at order placement
-    adminCommission: { type: Number, default: 0 },
-
-    // ── Deprecated legacy fields — do NOT write to these for new orders ────────
-    // Kept in schema only so old orders stored in MongoDB remain readable.
-    // Use riderEarnings.* and restaurantEarning for all new code.
-    /** @deprecated use riderEarnings.totalRiderEarning */
-    riderEarning: { type: Number, default: 0 },
-    /** @deprecated use riderEarnings.incentive */
-    riderIncentive: { type: Number, default: 0 },
-    /** @deprecated use riderEarnings.incentivePercentAtCompletion */
-    riderIncentivePercent: { type: Number, default: 0 },
-    /** @deprecated use adminCommission */
-    adminCommissionAtOrder: { type: Number, default: 0 },
-    /** @deprecated use restaurantEarning */
-    restaurantCommission: { type: Number, default: 0 },
-    riderCommission: { type: Number, default: 0 },
     
     cancellationReason: { type: String },
     cancellationInitiatedBy: {

@@ -1468,8 +1468,15 @@ exports.getRestaurantWalletEarnings = async (req, res) => {
           $group: {
             _id: null,
             totalRevenue: { $sum: '$totalAmount' },
-            totalCommission: { $sum: '$adminCommission' },
-            totalRestaurantNet: { $sum: '$restaurantEarning' },
+            totalCommission: {
+              $sum: {
+                $subtract: [
+                  { $ifNull: ['$paymentBreakdown.totalAdminCommissionDeduction', 0] },
+                  { $ifNull: ['$paymentBreakdown.adminCommissionGst', 0] },
+                ],
+              },
+            },
+            totalRestaurantNet: { $sum: { $ifNull: ['$paymentBreakdown.restaurantNet', 0] } },
             totalOrders: { $sum: 1 },
           }
         }

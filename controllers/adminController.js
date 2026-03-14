@@ -92,7 +92,14 @@ exports.getDashboard = async (req, res) => {
       {
         $group: {
           _id: null,
-          totalCommission: { $sum: { $ifNull: ["$adminCommission", 0] } },
+          totalCommission: {
+            $sum: {
+              $subtract: [
+                { $ifNull: ["$paymentBreakdown.totalAdminCommissionDeduction", 0] },
+                { $ifNull: ["$paymentBreakdown.adminCommissionGst", 0] },
+              ],
+            },
+          },
         },
       },
     ]);
@@ -1310,7 +1317,12 @@ exports.getCommissionReport = async (req, res) => {
       {
         $project: {
           amount: { $ifNull: ["$totalAmount", 0] },
-          commission: { $ifNull: ["$adminCommission", 0] },
+          commission: {
+            $subtract: [
+              { $ifNull: ["$paymentBreakdown.totalAdminCommissionDeduction", 0] },
+              { $ifNull: ["$paymentBreakdown.adminCommissionGst", 0] },
+            ],
+          },
           createdAt: 1,
         },
       },

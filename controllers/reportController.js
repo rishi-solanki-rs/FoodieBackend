@@ -24,6 +24,11 @@ const getRiderEarning = (order) => {
     }
     return 0;
 };
+const getAdminCommission = (order) => {
+    const pb = order?.paymentBreakdown || {};
+    return Number((pb.totalAdminCommissionDeduction || 0) - (pb.adminCommissionGst || 0));
+};
+const getRestaurantNet = (order) => Number(order?.paymentBreakdown?.restaurantNet || 0);
 exports.getRestaurantReport = async (req, res) => {
     try {
         const { page, limit, skip } = getPaginationParams(req, 20);
@@ -47,10 +52,10 @@ exports.getRestaurantReport = async (req, res) => {
                 const orders = await Order.find({ restaurant: restaurant._id });
                 const totalOrders = orders.length;
                 const deliveredOrders = orders.filter(o => o.status === 'delivered').length;
-                const totalEarnings = orders.reduce((sum, order) => sum + (order.restaurantEarning || 0), 0);
+                const totalEarnings = orders.reduce((sum, order) => sum + getRestaurantNet(order), 0);
                 const pendingPayouts = orders
                     .filter(o => o.status !== 'delivered' && o.status !== 'cancelled')
-                    .reduce((sum, o) => sum + (o.restaurantEarning || 0), 0);
+                    .reduce((sum, o) => sum + getRestaurantNet(o), 0);
                 const payoutsCompleted = totalEarnings - pendingPayouts;
                 return {
                     _id: restaurant._id,
@@ -203,8 +208,8 @@ exports.getOrderReport = async (req, res) => {
                 deliveryFee: order.deliveryFee || 0,
                 tax: order.tax || 0,
                 offer: order.discount || 0,
-                adminCommission: order.adminCommission || 0,
-                restaurantEarning: order.restaurantEarning || 0,
+                adminCommission: getAdminCommission(order),
+                restaurantEarning: getRestaurantNet(order),
                 driverCommission: getRiderEarning(order),
                 tip: order.tip || 0,
                 paymentBreakdown: {
@@ -218,7 +223,7 @@ exports.getOrderReport = async (req, res) => {
                     gstOnDiscount: order.paymentBreakdown?.gstOnDiscount ?? 0,
                     finalPayableToRestaurant: order.paymentBreakdown?.finalPayableToRestaurant ?? 0,
                     customerRestaurantBill: order.paymentBreakdown?.customerRestaurantBill ?? order.paymentBreakdown?.finalPayableToRestaurant ?? 0,
-                    restaurantNet: order.paymentBreakdown?.restaurantNet ?? order.restaurantEarning ?? 0,
+                    restaurantNet: order.paymentBreakdown?.restaurantNet ?? 0,
                     platformBillTotal: order.paymentBreakdown?.platformBillTotal ?? 0,
                     adminCommissionGst: order.paymentBreakdown?.adminCommissionGst ?? 0,
                     gstOnPlatform: order.paymentBreakdown?.gstOnPlatform ?? 0,
@@ -338,8 +343,8 @@ exports.getProfitLossReport = async (req, res) => {
             platformFee: order.platformFee || 0,
             deliveryFee: order.deliveryFee || 0,
             offer: order.discount || 0,
-            adminCommission: order.adminCommission || 0,
-            restaurantCommission: order.restaurantEarning || 0,
+            adminCommission: getAdminCommission(order),
+            restaurantCommission: getRestaurantNet(order),
             riderCommission: getRiderEarning(order),
             tip: order.tip || 0,
             isFreeDeli: order.deliveryFee === 0 ? 'Yes' : 'No'
@@ -419,7 +424,7 @@ exports.getAdminSettlementReport = async (req, res) => {
                 gstOnDiscount: pb.gstOnDiscount ?? 0,
                 finalPayableToRestaurant: pb.finalPayableToRestaurant ?? 0,
                 customerRestaurantBill: pb.customerRestaurantBill ?? pb.finalPayableToRestaurant ?? 0,
-                restaurantNet: pb.restaurantNet ?? order.restaurantEarning ?? 0,
+                restaurantNet: pb.restaurantNet ?? 0,
                 platformBillTotal: pb.platformBillTotal ?? 0,
                 adminCommissionGst: pb.adminCommissionGst ?? 0,
                 gstOnPlatform: pb.gstOnPlatform ?? 0,

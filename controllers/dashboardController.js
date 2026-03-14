@@ -16,9 +16,16 @@ exports.getOverview = async (req, res) => {
         $group: {
           _id: null,
           totalEarnings: { $sum: { $ifNull: ["$totalAmount", 0] } },
-          totalCommission: { $sum: { $ifNull: ["$adminCommission", 0] } },
+          totalCommission: {
+            $sum: {
+              $subtract: [
+                { $ifNull: ["$paymentBreakdown.totalAdminCommissionDeduction", 0] },
+                { $ifNull: ["$paymentBreakdown.adminCommissionGst", 0] },
+              ],
+            },
+          },
           totalRestaurantCommission: {
-            $sum: { $ifNull: ["$restaurantEarning", 0] },
+            $sum: { $ifNull: ["$paymentBreakdown.restaurantNet", 0] },
           },
           totalDeliveryCommission: {
             $sum: {

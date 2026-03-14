@@ -14,6 +14,7 @@ function validateOrderFinancialIntegrity(orderLike) {
   const pb = order.paymentBreakdown || {};
   const items = Array.isArray(order.items) ? order.items : [];
   const issues = [];
+  const adminCommission = r2((pb.totalAdminCommissionDeduction || 0) - (pb.adminCommissionGst || 0));
 
   // 1) itemTotal must equal sum(items.lineTotal)
   if (items.length > 0) {
@@ -127,24 +128,34 @@ function validateOrderFinancialIntegrity(orderLike) {
   // 7) Item-level restaurant earning aggregation
   if (items.length > 0) {
     const itemRestaurantSum = r2(items.reduce((sum, item) => sum + Number(item?.restaurantEarningAmount || 0), 0));
-    if (!nearlyEqual(order.restaurantEarning || 0, itemRestaurantSum)) {
-      issues.push('restaurant earning mismatch: sum(items.restaurantEarningAmount) != order.restaurantEarning');
+    if (!nearlyEqual(pb.restaurantNet || 0, itemRestaurantSum)) {
+      issues.push('restaurant earning mismatch: sum(items.restaurantEarningAmount) != paymentBreakdown.restaurantNet');
     }
   }
 
   // 8) Canonical payment breakdown consistency
-  if (pb.restaurantNet !== undefined && !nearlyEqual(pb.restaurantNet || 0, order.restaurantEarning || 0)) {
-    issues.push('paymentBreakdown.restaurantNet mismatch with order.restaurantEarning');
+  if (!nearlyEqual(pb.restaurantNet || 0, pb.restaurantNetEarning || 0)) {
+    issues.push('restaurant net alias mismatch: restaurantNet != restaurantNetEarning');
   }
 
   // 9) Restaurant net formula integrity
   const expectedRestaurantNet = r2(
     (pb.restaurantGross ?? order.itemTotal ?? 0)
-    - (order.adminCommission || 0)
+    - adminCommission
     - (pb.adminCommissionGst || 0),
   );
-  if (!nearlyEqual(order.restaurantEarning || 0, expectedRestaurantNet)) {
+  if (!nearlyEqual(pb.restaurantNet || 0, expectedRestaurantNet)) {
     issues.push('restaurant net mismatch: restaurantGross - adminCommission - adminCommissionGst');
+  }
+
+  // 10) Total order amount consistency
+  const expectedOrderTotal = r2(
+    (pb.finalPayableToRestaurant || 0)
+      + (pb.platformBillTotal || 0)
+      + ((order.tip ?? re.tip) || 0),
+  );
+  if (!nearlyEqual(order.totalAmount || 0, expectedOrderTotal)) {
+    issues.push('total amount mismatch: finalPayableToRestaurant + platformBillTotal + tip != order.totalAmount');
   }
 
   if (issues.length > 0) {
@@ -156,8 +167,8 @@ function validateOrderFinancialIntegrity(orderLike) {
         itemTotal: Number(pb.itemTotal ?? order.itemTotal ?? 0),
         gstOnFood: Number(pb.gstOnFood || 0),
         packagingCharge: Number(pb.packagingCharge ?? order.packaging ?? 0),
-        restaurantEarning: Number(order.restaurantEarning || 0),
-        adminCommission: Number(order.adminCommission || 0),
+        restaurantEarning: Number(pb.restaurantNet || 0),
+        adminCommission: Number(adminCommission || 0),
         adminCommissionGst: Number(pb.adminCommissionGst || 0),
         platformDiscountUsed: Number(pb.platformDiscountUsed || 0),
         restaurantDiscountUsed: Number(pb.restaurantDiscountUsed || 0),

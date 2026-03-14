@@ -90,10 +90,12 @@ async function generateBills(orderId) {
   const deliveryCharge     = r2(order.deliveryFee       ?? 0);
   const tip                = r2(order.tip               ?? 0);
 
-  // Settled commission / earnings (written by paymentService after delivery)
-  const adminCommissionAmount  = r2(order.adminCommission   ?? 0);
+  // Settled commission / earnings from canonical paymentBreakdown
+  const adminCommissionAmount  = r2(
+    (pb.totalAdminCommissionDeduction ?? 0) - (pb.adminCommissionGst ?? 0),
+  );
   const adminCommissionPercent = (() => {
-    if (Number.isFinite(Number(order.adminCommission)) && itemsTotal > 0) {
+    if (Number.isFinite(Number(adminCommissionAmount)) && itemsTotal > 0) {
       // Back-calculate or use the stored item-level first commission percent
       const sumItemPercent = Array.isArray(order.items)
         ? order.items.reduce((s, i) => s + (Number(i.commissionPercent) || 0), 0)
@@ -102,7 +104,7 @@ async function generateBills(orderId) {
     }
     return 0;
   })();
-  const restaurantNetEarning   = r2(order.restaurantEarning ?? pb.restaurantNet ?? 0);
+  const restaurantNetEarning   = r2(pb.restaurantNet ?? 0);
   const riderDeliveryCharge    = r2(order.riderEarnings?.deliveryCharge ?? 0);
   const riderPlatformFeeCredit = r2(order.riderEarnings?.platformFee ?? 0);
   const riderIncentive         = r2(order.riderEarnings?.incentive ?? 0);

@@ -339,7 +339,6 @@ exports.placeOrder = async (req, res) => {
         cgst: itemCgst,
         sgst: itemSgst,
         packagingCharge: Number(calculatedItem.unitPackagingCharge || 0),
-        packagingTotal: Number(calculatedItem.packagingTotal || 0),
         packagingGstPercent: Number(calculatedItem.packagingGstPercent || 0),
         packagingGstAmount: Number(calculatedItem.packagingGstAmount || 0),
         commissionPercent,
@@ -488,9 +487,6 @@ exports.placeOrder = async (req, res) => {
         computedVersion: "settlement-v2",
         computedAt: new Date(),
       },
-      // Canonical settlement fields (single source of truth)
-      restaurantEarning: restaurantEarningSum,
-      adminCommission,
       // Structured rider earnings (single source of truth)
       riderEarnings: riderEarningsData,
       deliveryAddress: {
@@ -797,7 +793,7 @@ exports.getOrderDetailsRestaurant = async (req, res) => {
           tip: orderObj.tip,
           discount: orderObj.discount,
           totalAmount: orderObj.totalAmount,
-          restaurantEarning: orderObj.restaurantEarning || 0,
+          restaurantEarning: orderObj.paymentBreakdown?.restaurantNet || 0,
         },
         payment: {
           method: orderObj.paymentMethod,
@@ -3125,13 +3121,15 @@ const buildBillingSectionsFromOrder = (orderLike) => {
   const totalSgstCustomer = asAmount((pb.sgstOnFood ?? (gstOnFood / 2)) + (pb.sgstOnPackaging ?? (packagingGst / 2)) + sgstDelivery + (pb.sgstPlatform ?? (asAmount(pb.gstOnPlatform ?? 0) / 2)));
   const totalGstCustomer = asAmount(totalCgstCustomer + totalSgstCustomer);
 
-  const commissionAmount = asAmount(order.adminCommission ?? 0);
+  const commissionAmount = asAmount(
+    (pb.totalAdminCommissionDeduction ?? 0) - (pb.adminCommissionGst ?? 0),
+  );
   const commissionPercent = itemsTotal > 0 ? asAmount((commissionAmount / itemsTotal) * 100) : 0;
   const commissionGst = asAmount(pb.adminCommissionGst ?? 0);
   const commissionGstSplit = splitGst(commissionGst);
 
   const restaurantGross = asAmount(pb.restaurantGross ?? (itemsTotal + packagingCharge));
-  const netEarning = asAmount(pb.restaurantNet ?? order.restaurantEarning ?? 0);
+  const netEarning = asAmount(pb.restaurantNet ?? 0);
 
   const riderDeliveryCharge = asAmount(rider.deliveryCharge ?? 0);
   const riderPlatformCredit = asAmount(rider.platformFee ?? 0);

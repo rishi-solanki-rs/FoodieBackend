@@ -92,9 +92,12 @@ async function processSettlement(orderId, options = {}) {
 
     const paymentBreakdown = order.paymentBreakdown || {};
 
-    // Canonical order-level financial fields only
-    const restaurantEarning = r2(order.restaurantEarning || 0);
-    const adminCommission = r2(order.adminCommission || 0);
+    // Canonical order-level financial fields sourced from paymentBreakdown
+    const restaurantEarning = r2(paymentBreakdown.restaurantNet || 0);
+    const adminCommission = r2(
+      (paymentBreakdown.totalAdminCommissionDeduction || 0)
+      - (paymentBreakdown.adminCommissionGst || 0),
+    );
     const adminCommissionGst = r2(paymentBreakdown.adminCommissionGst || 0);
     const gstOnPlatform = r2(paymentBreakdown.gstOnPlatform || 0);
 
@@ -166,7 +169,6 @@ async function processSettlement(orderId, options = {}) {
     adminWallet.lastUpdated = new Date();
     await adminWallet.save({ session });
 
-    // Preserve deprecated fields as mirrors only; no calculations from them.
     order.riderEarnings = {
       deliveryCharge: riderDeliveryCharge,
       platformFee: riderPlatformFee,
@@ -176,11 +178,6 @@ async function processSettlement(orderId, options = {}) {
       incentivePercentAtCompletion: r2(order.riderEarnings?.incentivePercentAtCompletion || 0),
       earnedAt: new Date(),
     };
-    order.riderEarning = riderTotalEarning;
-    order.riderIncentive = riderIncentive;
-    order.riderIncentivePercent = r2(order.riderEarnings?.incentivePercentAtCompletion || 0);
-    order.restaurantCommission = restaurantEarning;
-    order.adminCommissionAtOrder = adminCommission;
 
     order.settlementStatus = 'processed';
     order.settlementProcessedAt = new Date();

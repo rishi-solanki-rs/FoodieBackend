@@ -53,9 +53,12 @@ exports.findAndNotifyRider = async (orderId) => {
         const customerCoords = order.deliveryAddress?.coordinates || [0, 0];
         const deliveryDistance = calculateDistance(restaurantCoords, customerCoords);
         const deliveryMinutes = estimateTravelMinutes(deliveryDistance);
-        const riderEarning = typeof order.riderEarning === 'number'
-            ? order.riderEarning
-            : (order.riderCommission || 0) + (order.tip || 0);
+        const riderEarning = typeof order.riderEarnings?.totalRiderEarning === 'number'
+            ? order.riderEarnings.totalRiderEarning
+            : ((order.riderEarnings?.deliveryCharge || 0)
+                + (order.riderEarnings?.platformFee || 0)
+                + (order.riderEarnings?.incentive || 0)
+                + (order.riderEarnings?.tip ?? order.tip || 0));
 
         // Create RideRequests for all riders
         const rideRequestResults = await Promise.allSettled(
@@ -81,6 +84,8 @@ exports.findAndNotifyRider = async (orderId) => {
         }
 
         // Notify all riders at once via socket + push notification
+        console.log(`[Dispatch] 📡 EMITTING rider:new_order_request to ${successfulRequests.length} connected riders...`);
+        
         for (const { rider, request } of successfulRequests) {
             const riderCoords = rider.currentLocation?.coordinates || [0, 0];
             const pickupDistance = calculateDistance(riderCoords, restaurantCoords);
@@ -107,6 +112,14 @@ exports.findAndNotifyRider = async (orderId) => {
                 expiresIn: BATCH_TIMEOUT_MS / 1000
             };
 
+            const riderRoomId = `rider:${rider.user.toString()}`;
+            console.log(`  → 📤 Emitting to room: ${riderRoomId}`, {
+                orderId: order._id.toString(),
+                restaurantName: restaurant.name,
+                earnings: riderEarning,
+                timestamp: new Date().toISOString(),
+            });
+            
             socketService.emitToRider(rider.user.toString(), 'rider:new_order_request', requestData);
             sendNotification(
                 rider.user._id || rider.user,
