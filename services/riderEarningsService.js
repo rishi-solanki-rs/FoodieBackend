@@ -81,19 +81,21 @@ const calculatePlatformFeeShare = (platformFeeFromOrder) => {
  * CALCULATE RIDER INCENTIVE
  * 
  * Formula:
- * riderIncentive = itemTotal (before GST) × incentivePercent / 100
+ * riderIncentive = priceAfterRestaurantDiscount × incentivePercent / 100
  * 
  * Example:
- * - Order item total: ₹1000 (before tax)
+ * - Order item total: ₹1000
+ * - Restaurant discount: ₹200
+ * - Discounted food value: ₹800
  * - Incentive percent: 5%
- * - Rider incentive: 1000 × 5 / 100 = ₹50
+ * - Rider incentive: 800 × 5 / 100 = ₹40
  * 
- * @param {number} itemTotal - Order item total before GST
+ * @param {number} priceAfterRestaurantDiscount - Discounted food value before GST
  * @param {number} incentivePercent - Incentive percentage from admin settings
  * @returns {number} - Calculated incentive amount
  */
-const calculateIncentive = (itemTotal, incentivePercent) => {
-  const total = Math.max(0, itemTotal || 0);
+const calculateIncentive = (priceAfterRestaurantDiscount, incentivePercent) => {
+  const total = Math.max(0, priceAfterRestaurantDiscount || 0);
   const percent = Math.max(0, incentivePercent || 0);
   
   return (total * percent) / 100;
@@ -105,7 +107,7 @@ const calculateIncentive = (itemTotal, incentivePercent) => {
  * Comprehensive calculation of all three components:
  * totalRiderEarning = deliveryCharge + platformFee + incentive + tip
  * 
- * @param {object} order - Order object with deliveryDistanceKm, deliveryFee, platformFee, itemTotal
+ * @param {object} order - Order object with deliveryDistanceKm, deliveryFee, platformFee, itemTotal and paymentBreakdown
  * @param {object} settings - Admin settings
  * @returns {object} - Complete breakdown: { deliveryCharge, platformFee, incentive, tip, totalRiderEarning }
  */
@@ -119,9 +121,16 @@ const calculateRiderEarnings = (order, settings) => {
   const incentivePercent = payoutConfig.riderIncentivePercent || 5;
   const tip = Math.max(0, Number(order.tip || 0));
   
-  // Item total should be before GST/tax
-  const itemTotal = order.itemTotal || 0;
-  const incentive = calculateIncentive(itemTotal, incentivePercent);
+  // Incentive base: discounted food value before GST.
+  const discountedFoodValue = Math.max(
+    0,
+    Number(
+      order?.paymentBreakdown?.priceAfterRestaurantDiscount
+      ?? order?.paymentBreakdown?.taxableAmountFood
+      ?? ((order?.itemTotal || 0) - (order?.paymentBreakdown?.restaurantDiscount || 0)),
+    ),
+  );
+  const incentive = calculateIncentive(discountedFoodValue, incentivePercent);
   
   const totalRiderEarning = deliveryInfo.totalDeliveryCharge + platformFeeShare + incentive + tip;
   
@@ -180,7 +189,7 @@ const creditRiderEarnings = async (orderId) => {
     // Use snapshot fixed at order creation time (System A).
     // deliveryCharge  = delivery fee charged to customer (slab-based)
     // platformFee     = full platform fee
-    // incentive       = % of itemTotal
+    // incentive       = % of discounted food value (priceAfterRestaurantDiscount)
     // The snapshot is always set in placeOrder; if missing, earnings cannot be determined.
     let earningsBreakdown;
     if (order.riderEarnings && order.riderEarnings.totalRiderEarning > 0) {

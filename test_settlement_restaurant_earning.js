@@ -1,6 +1,7 @@
 const assert = require('assert');
 const { calculateSettlementBreakdown } = require('./services/settlementCalculator');
 const { validateOrderFinancialIntegrity } = require('./services/financialIntegrityService');
+const { calculateIncentive, calculateRiderEarnings } = require('./services/riderEarningsService');
 
 function r5(n) {
   const numeric = Number(n);
@@ -109,9 +110,42 @@ function testIntegrityUsesRestaurantNetEarningAggregation() {
   );
 }
 
+function testRiderIncentiveUsesDiscountedFoodValue() {
+  const incentive = r5(calculateIncentive(80, 20));
+  assert.strictEqual(incentive, 16);
+
+  const riderEarnings = calculateRiderEarnings(
+    {
+      itemTotal: 100,
+      platformFee: 9,
+      tip: 0,
+      deliveryDistanceKm: 2,
+      paymentBreakdown: {
+        restaurantDiscount: 20,
+        priceAfterRestaurantDiscount: 80,
+      },
+    },
+    {
+      payoutConfig: {
+        riderIncentivePercent: 20,
+        riderBaseEarningPerDelivery: 30,
+        riderBaseDistanceKm: 3,
+        riderPerKmRate: 5,
+      },
+    },
+  );
+
+  assert.strictEqual(r5(riderEarnings.incentive), 16);
+  assert.strictEqual(
+    r5(riderEarnings.totalRiderEarning),
+    r5(riderEarnings.deliveryCharge + riderEarnings.platformFee + riderEarnings.incentive + riderEarnings.tip),
+  );
+}
+
 function run() {
   testSettlementRestaurantEarningIncludesPackaging();
   testIntegrityUsesRestaurantNetEarningAggregation();
+  testRiderIncentiveUsesDiscountedFoodValue();
   console.log('PASS: settlement and integrity restaurant earning tests');
 }
 

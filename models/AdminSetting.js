@@ -60,7 +60,7 @@ const AdminSettingSchema = new mongoose.Schema(
       // Base distance included in rider earnings (km)
       riderBaseDistanceKm: { type: Number, default: 3, min: 0 },
 
-      // Rider incentive: % of item subtotal (before GST/fees) given to rider per order
+      // Rider incentive: % of discounted food value (priceAfterRestaurantDiscount) given to rider per order
       riderIncentivePercent: { type: Number, default: 5, min: 0, max: 100 },
     },
 

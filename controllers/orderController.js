@@ -412,8 +412,9 @@ exports.placeOrder = async (req, res) => {
     const riderPlatformFeeShare = toMoney(bill.platformFee || 0);
     // Admin platform GST earning = GST on platform fee only.
     const adminPlatformFeeShare = toMoney(canonicalSettlement.platformGST || 0);
-    // Incentive: % of item subtotal (before GST/fees)
-    const riderIncentiveAmount = Math.max(0, toMoney(bill.itemTotal * (incentivePercent / 100)));
+    // Incentive is based on discounted food value (after restaurant discount, before GST).
+    const incentiveBase = toMoney(canonicalSettlement.priceAfterRestaurantDiscount || 0);
+    const riderIncentiveAmount = Math.max(0, toMoney(incentiveBase * (incentivePercent / 100)));
     const riderTipAmount = Math.max(0, toMoney(tipAmount || 0));
 
     const riderEarningsData = {

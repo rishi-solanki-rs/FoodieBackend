@@ -296,8 +296,8 @@ const orderSchema = new mongoose.Schema(
       platformFee: { type: Number, default: 0 },
       
       // COMPONENT 3: Incentive - Performance/volume bonus based on order value
-      // Calculation: (itemTotal before GST) × riderIncentivePercent
-      // Example: ₹1000 × 5% = ₹50
+      // Calculation: (priceAfterRestaurantDiscount) × riderIncentivePercent
+      // Example: ₹1000 item total - ₹200 restaurant discount = ₹800; incentive at 5% = ₹40
       incentive: { type: Number, default: 0 },
 
       // COMPONENT 4: Tip - Customer tip passed 100% to rider
