@@ -404,13 +404,13 @@ exports.placeOrder = async (req, res) => {
 
     // ── Rider Earnings ───────────────────────────────────────────────────────
     // Rider receives: deliveryFee (pre-GST) + platformFee (pre-GST) + incentive.
-    // The 18% GST on (deliveryFee + platformFee) goes to admin wallet as gstOnPlatform.
+    // Platform GST and delivery GST are tracked separately in paymentBreakdown.
 
     // Rider delivery charge = full delivery fee collected from customer (System A — snapshot)
     const riderDeliveryCharge = toMoney(bill.deliveryFee || 0);
-    // Rider receives the pre-GST platform fee; the 18% GST portion goes to admin wallet.
+    // Rider receives the pre-GST platform fee.
     const riderPlatformFeeShare = toMoney(bill.platformFee || 0);
-    // Admin's platform GST earning = 18% on (deliveryFee + platformFee) combined
+    // Admin platform GST earning = GST on platform fee only.
     const adminPlatformFeeShare = toMoney(canonicalSettlement.gstOnPlatform || 0);
     // Incentive: % of item subtotal (before GST/fees)
     const riderIncentiveAmount = Math.max(0, toMoney(bill.itemTotal * (incentivePercent / 100)));
@@ -490,10 +490,12 @@ exports.placeOrder = async (req, res) => {
         cgstAdminCommission,
         sgstAdminCommission,
         adminCommissionGstPercent,
+        deliveryGST: canonicalSettlement.deliveryGst,
         deliveryGst: canonicalSettlement.deliveryGst,
         cgstDelivery: canonicalSettlement.cgstDelivery,
         sgstDelivery: canonicalSettlement.sgstDelivery,
         deliveryChargeGstPercent: canonicalSettlement.deliveryChargeGstPercent,
+        platformGST: canonicalSettlement.gstOnPlatform,
         totalAdminCommissionDeduction: toMoney(adminCommission + adminCommissionGstTotal),
         totalGstCollected,
         totalGstBreakdownForAdmin: {
@@ -3137,14 +3139,15 @@ const buildBillingSectionsFromOrder = (orderLike) => {
   const packagingCharge = asAmount(pb.packagingCharge ?? order.packaging ?? 0);
   const packagingGst = asAmount(pb.packagingGST ?? 0);
   const deliveryFee = asAmount(pb.deliveryCharge ?? order.deliveryFee ?? 0);
-  const deliveryGst = asAmount(pb.deliveryGst ?? 0);
+  const deliveryGst = asAmount(pb.deliveryGST ?? pb.deliveryGst ?? 0);
   const cgstDelivery = asAmount(pb.cgstDelivery ?? (deliveryGst / 2));
   const sgstDelivery = asAmount(pb.sgstDelivery ?? (deliveryGst - cgstDelivery));
   const platformFee = asAmount(order.platformFee ?? pb.platformFee ?? 0);
+  const platformGst = asAmount(pb.platformGST ?? pb.gstOnPlatform ?? 0);
   const tip = asAmount(order.tip ?? 0);
 
-  const totalCgstCustomer = asAmount((pb.cgstOnFood ?? (gstOnFood / 2)) + (pb.cgstOnPackaging ?? (packagingGst / 2)) + cgstDelivery + (pb.cgstPlatform ?? (asAmount(pb.gstOnPlatform ?? 0) / 2)));
-  const totalSgstCustomer = asAmount((pb.sgstOnFood ?? (gstOnFood / 2)) + (pb.sgstOnPackaging ?? (packagingGst / 2)) + sgstDelivery + (pb.sgstPlatform ?? (asAmount(pb.gstOnPlatform ?? 0) / 2)));
+  const totalCgstCustomer = asAmount((pb.cgstOnFood ?? (gstOnFood / 2)) + (pb.cgstOnPackaging ?? (packagingGst / 2)) + cgstDelivery + (pb.cgstPlatform ?? (platformGst / 2)));
+  const totalSgstCustomer = asAmount((pb.sgstOnFood ?? (gstOnFood / 2)) + (pb.sgstOnPackaging ?? (packagingGst / 2)) + sgstDelivery + (pb.sgstPlatform ?? (platformGst / 2)));
   const totalGstCustomer = asAmount(totalCgstCustomer + totalSgstCustomer);
 
   const commissionAmount = asAmount(
@@ -3165,12 +3168,15 @@ const buildBillingSectionsFromOrder = (orderLike) => {
   const riderIncentivePercent = asAmount(rider.incentivePercentAtCompletion ?? 0);
   const riderTotalEarning = asAmount(rider.totalRiderEarning ?? (riderDeliveryCharge + riderPlatformCredit + riderIncentive + riderTip));
 
-  const totalCollectionFromCustomer = asAmount(pb.platformBillTotal ?? (deliveryFee + platformFee + asAmount(pb.gstOnPlatform ?? 0)));
+  const totalCollectionFromCustomer = asAmount(
+    pb.platformBillTotal
+    ?? (deliveryFee + deliveryGst + platformFee + platformGst),
+  );
   const sharedWithRider = asAmount(riderDeliveryCharge + riderPlatformCredit);
   const retainedByPlatform = asAmount(totalCollectionFromCustomer - sharedWithRider);
 
   const gstOnCommission = commissionGst;
-  const gstOnPlatform = asAmount(pb.gstOnPlatform ?? 0);
+  const gstOnPlatform = platformGst;
   const platformCgst = asAmount(pb.cgstPlatform ?? (gstOnPlatform / 2));
   const platformSgst = asAmount(pb.sgstPlatform ?? (gstOnPlatform - platformCgst));
   const totalCgstPlatform = asAmount(commissionGstSplit.cgst + platformCgst);

@@ -87,7 +87,7 @@ async function generateBills(orderId) {
   const rawGstOnFood       = r2(pb.gstOnFood           ?? 0);
   const packagingCharge    = r2(pb.packagingCharge      ?? order.packaging    ?? 0);
   const rawPackagingGst    = r2(pb.packagingGST         ?? 0);
-  const platformFee        = r2(pb.taxablePlatformAmount ?? order.platformFee ?? 0);
+  const platformFee        = r2(pb.platformFee ?? order.platformFee ?? 0);
   const deliveryCharge     = r2(order.deliveryFee       ?? 0);
   const tip                = r2(order.tip               ?? 0);
 
@@ -139,22 +139,25 @@ async function generateBills(orderId) {
     sgst:  r2(rawPackagingGst / 2),
   };
 
+  const platformGstTotal = r2(pb.platformGST ?? pb.gstOnPlatform ?? 0);
+  const deliveryGstTotal = r2(pb.deliveryGST ?? pb.deliveryGst ?? (deliveryCharge * ((pb.deliveryChargeGstPercent ?? gstRates.deliveryChargeGstPercent) / 100)));
+
   // Platform fee GST (18% by default, admin-configurable)
   const gstOnPlatform = {
     percent: r2(pb.gstPercentOnPlatform ?? gstRates.platformFeeGstPercent),
-    base: r2(pb.taxablePlatformAmount ?? platformFee),
-    total: r2(pb.gstOnPlatform ?? 0),
-    cgst: r2(pb.cgstPlatform ?? ((pb.gstOnPlatform || 0) / 2)),
-    sgst: r2(pb.sgstPlatform ?? ((pb.gstOnPlatform || 0) / 2)),
+    base: r2(pb.platformFee ?? platformFee),
+    total: platformGstTotal,
+    cgst: r2(pb.cgstPlatform ?? (platformGstTotal / 2)),
+    sgst: r2(pb.sgstPlatform ?? (platformGstTotal / 2)),
   };
 
   // Delivery charge GST (18% by default, admin-configurable)
   const gstOnDelivery = {
     percent: r2(pb.deliveryChargeGstPercent ?? gstRates.deliveryChargeGstPercent),
     base: r2(deliveryCharge),
-    total: r2(pb.deliveryGst ?? (deliveryCharge * ((pb.deliveryChargeGstPercent ?? gstRates.deliveryChargeGstPercent) / 100))),
-    cgst: r2(pb.cgstDelivery ?? ((pb.deliveryGst ?? (deliveryCharge * ((pb.deliveryChargeGstPercent ?? gstRates.deliveryChargeGstPercent) / 100))) / 2)),
-    sgst: r2(pb.sgstDelivery ?? ((pb.deliveryGst ?? (deliveryCharge * ((pb.deliveryChargeGstPercent ?? gstRates.deliveryChargeGstPercent) / 100))) / 2)),
+    total: deliveryGstTotal,
+    cgst: r2(pb.cgstDelivery ?? (deliveryGstTotal / 2)),
+    sgst: r2(pb.sgstDelivery ?? (deliveryGstTotal / 2)),
   };
 
   // Admin commission GST (18%, the platform charges this to the restaurant)

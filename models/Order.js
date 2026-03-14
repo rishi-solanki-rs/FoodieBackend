@@ -31,10 +31,14 @@ function normalizePaymentBreakdown(pb) {
   pb.cgstOnPackaging = packagingSplit.cgst;
   pb.sgstOnPackaging = packagingSplit.sgst;
 
+  pb.deliveryGST = roundMoney(pb.deliveryGST ?? pb.deliveryGst ?? 0);
+  pb.deliveryGst = pb.deliveryGST;
   const deliverySplit = splitGst(pb.deliveryGst || 0);
   pb.cgstDelivery = deliverySplit.cgst;
   pb.sgstDelivery = deliverySplit.sgst;
 
+  pb.platformGST = roundMoney(pb.platformGST ?? pb.gstOnPlatform ?? 0);
+  pb.gstOnPlatform = pb.platformGST;
   const platformSplit = splitGst(pb.gstOnPlatform || 0);
   pb.cgstPlatform = platformSplit.cgst;
   pb.sgstPlatform = platformSplit.sgst;
@@ -167,11 +171,13 @@ const orderSchema = new mongoose.Schema(
       sgstOnPackaging: { type: Number, default: 0 },
       // Platform bill section (invoice v2)
       deliveryCharge: { type: Number, default: 0 },
+      deliveryGST: { type: Number, default: 0 },
       deliveryGst: { type: Number, default: 0 },
       cgstDelivery: { type: Number, default: 0 },
       sgstDelivery: { type: Number, default: 0 },
       deliveryChargeGstPercent: { type: Number, default: 18 },
       taxablePlatformAmount: { type: Number, default: 0 },
+      platformGST: { type: Number, default: 0 },
       gstOnPlatform: { type: Number, default: 0 },
       cgstPlatform: { type: Number, default: 0 },
       sgstPlatform: { type: Number, default: 0 },
@@ -185,7 +191,7 @@ const orderSchema = new mongoose.Schema(
       riderDeliveryEarning: { type: Number, default: 0 },   // delivery fee credited to rider
       riderIncentive: { type: Number, default: 0 },         // incentive bonus credited to rider
       riderPlatformFeeShare: { type: Number, default: 0 },  // platform fee portion to rider (pre-GST)
-      adminPlatformFeeShare: { type: Number, default: 0 },  // = gstOnPlatform: 18% GST on delivery+platform fee → admin wallet
+      adminPlatformFeeShare: { type: Number, default: 0 },  // = gstOnPlatform: GST on platform fee → admin wallet
       // Admin commission GST (invoice v2) — GST on restaurant commission, deducted from restaurant earnings
       adminCommissionGst: { type: Number, default: 0 },            // adminCommission × 18%
       cgstAdminCommission: { type: Number, default: 0 },

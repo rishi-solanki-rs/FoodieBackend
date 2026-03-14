@@ -376,11 +376,11 @@ async function calculateOrderPrice({
       packagingGstPercent,
       foodierDiscount: discount,
       discountGstPercent,
-      // Pass platform bill so settlement can apply platform-first discount distribution
+      // Pass platform and delivery components; settlement applies separated GST.
       deliveryFee: safeDeliveryFee,
       platformFee,
       deliveryChargeGstPercent: adminSettings.deliveryChargeGstPercent,
-      platformGstPercent: adminSettings.platformFeeGstPercent, // 18% GST on platform fee + delivery (service tax)
+      platformGstPercent: adminSettings.platformFeeGstPercent,
       adminCommissionAmount: estimatedAdminCommission,
       adminCommissionGstPercent: adminSettings.adminCommissionGstPercent,
     });
@@ -428,7 +428,7 @@ async function calculateOrderPrice({
         taxRate: null,
         surgeFee: 0,
         surgeMultiplier: 1,
-        subtotal: round(settlement.restaurantBillTotal + safeDeliveryFee + settlement.deliveryGst + platformFee + settlement.gstOnPlatform),
+        subtotal: round(settlement.restaurantBillTotal + settlement.platformBillBeforeDiscount),
       },
       coupon: {
         code: couponCode || null,

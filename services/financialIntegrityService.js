@@ -120,9 +120,15 @@ function validateOrderFinancialIntegrity(orderLike) {
   }
 
   // 4) Platform bill integrity
-  const platformBillExpected = r2((pb.taxablePlatformAmount || 0) + (pb.gstOnPlatform || 0) + (pb.deliveryGst || 0));
+  const platformBillExpected = r2(
+    (pb.deliveryFee || 0)
+      + (pb.deliveryGst || 0)
+      + (pb.platformFee || 0)
+      + (pb.gstOnPlatform || 0)
+      - (pb.platformDiscountUsed || 0),
+  );
   if (!nearlyEqual(pb.platformBillTotal || 0, platformBillExpected)) {
-    issues.push('platformBillTotal mismatch: taxablePlatformAmount + gstOnPlatform + deliveryGst');
+    issues.push('platformBillTotal mismatch: deliveryFee + deliveryGst + platformFee + gstOnPlatform - platformDiscountUsed');
   }
 
   // 5) Discount distribution integrity
