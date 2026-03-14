@@ -4,16 +4,17 @@
  * Pricing rules (India, pure-veg app):
  * ─────────────────────────────────────
  * 1. Item total      = sum of (basePrice + variation.price + addOns.price) × qty
- * 2. GST             = per-item GST% (0/5/12/18) applied on the full line total (base + variation + add-ons)
- * 3. Packaging       = sum of product.packagingCharge × qty
- * 4. Platform fee    = global, admin-configurable (default ₹9)
- * 5. Delivery fee    = distance-based slab (admin-configurable):
+ * 2. Restaurant disc = per-item restaurant discount applied before GST
+ * 3. GST             = per-item GST% (0/5/12/18) applied on discounted food price
+ * 4. Packaging       = sum of product.packagingCharge × qty (not discountable)
+ * 5. Platform fee    = global, admin-configurable (default ₹9)
+ * 6. Delivery fee    = distance-based slab (admin-configurable):
  *                        0 – 5 km  → ₹3 / km
  *                        5 – 10 km → ₹4 / km
  *                        above 10  → ₹6 / km
  *    (Free delivery override from restaurant.isFreeDelivery)
- * 6. Discount        = coupon applied on subtotal
- * 7. Tip             = customer-chosen tip
+ * 7. Coupon discount = platform-only (delivery + platform components)
+ * 8. Tip             = customer-chosen tip
  */
 
 const Promocode = require('../models/Promocode');
@@ -91,11 +92,34 @@ function normalizePricingItem({ item, product, adminSettings }) {
   }
 
   const lineTotal = round(unitPrice * quantity);
+
+  const restaurantDiscountConfig = product?.restaurantDiscount || {};
+  const discountActive =
+    Boolean(restaurantDiscountConfig?.active)
+    && Number(restaurantDiscountConfig?.value || 0) > 0;
+  const discountType = restaurantDiscountConfig?.type === 'flat' ? 'flat' : 'percent';
+  const rawDiscountValue = toNonNegativeNumber(restaurantDiscountConfig?.value, 0);
+  let restaurantDiscountAmount = 0;
+
+  if (discountActive) {
+    if (discountType === 'percent') {
+      restaurantDiscountAmount = round(lineTotal * (Math.min(100, rawDiscountValue) / 100));
+    } else {
+      restaurantDiscountAmount = round(rawDiscountValue * quantity);
+    }
+  }
+
+  restaurantDiscountAmount = round(Math.min(lineTotal, Math.max(0, restaurantDiscountAmount)));
+  const priceAfterDiscount = round(Math.max(0, lineTotal - restaurantDiscountAmount));
+  const restaurantDiscountPercent = lineTotal > 0
+    ? round((restaurantDiscountAmount / lineTotal) * 100)
+    : 0;
+
   const gstPercent = toNonNegativeNumber(
     typeof item?.gstPercent === 'number' ? item.gstPercent : product?.gstPercent,
     adminSettings.defaultGstPercent,
   );
-  const itemGstAmount = round(lineTotal * (gstPercent / 100));
+  const itemGstAmount = round(priceAfterDiscount * (gstPercent / 100));
   const cgst = round(itemGstAmount / 2);
   const sgst = round(itemGstAmount - cgst);
 
@@ -113,11 +137,11 @@ function normalizePricingItem({ item, product, adminSettings }) {
     typeof item?.adminCommissionPercent === 'number' ? item.adminCommissionPercent : product?.adminCommissionPercent,
     adminSettings?.payoutConfig?.defaultRestaurantCommissionPercent ?? 0,
   );
-  const adminCommissionAmount = round(lineTotal * (commissionPercent / 100));
+  const adminCommissionAmount = round(priceAfterDiscount * (commissionPercent / 100));
   const adminCommissionGstPercent = toNonNegativeNumber(adminSettings?.adminCommissionGstPercent, 18);
   const adminCommissionGstAmount = round(adminCommissionAmount * (adminCommissionGstPercent / 100));
   const restaurantNetEarningAmount = round(
-    Math.max(0, lineTotal + packagingTotal - adminCommissionAmount - adminCommissionGstAmount),
+    Math.max(0, priceAfterDiscount + packagingTotal - adminCommissionAmount - adminCommissionGstAmount),
   );
 
   return {
@@ -127,7 +151,12 @@ function normalizePricingItem({ item, product, adminSettings }) {
     variationPrice,
     addonPrice,
     unitPrice,
+    originalPrice: lineTotal,
     lineTotal,
+    restaurantDiscountPercent,
+    restaurantDiscountAmount,
+    priceAfterDiscount,
+    gstOnDiscountedPrice: itemGstAmount,
     gstPercent,
     itemGstAmount,
     cgst,
@@ -276,7 +305,7 @@ async function calculateOrderPrice({
       : [];
     const products = productIds.length > 0
       ? await Product.find({ _id: { $in: productIds } })
-          .select('_id basePrice gstPercent packagingCharge packagingGstPercent adminCommissionPercent')
+          .select('_id basePrice gstPercent packagingCharge packagingGstPercent adminCommissionPercent restaurantDiscount')
           .lean()
       : [];
     const productMap = new Map(products.map((product) => [String(product._id), product]));
@@ -290,6 +319,8 @@ async function calculateOrderPrice({
 
     // 1. Item total + GST
     const itemTotal = round(normalizedItems.reduce((sum, item) => sum + item.lineTotal, 0));
+    const restaurantDiscountTotal = round(normalizedItems.reduce((sum, item) => sum + item.restaurantDiscountAmount, 0));
+    const priceAfterRestaurantDiscount = round(normalizedItems.reduce((sum, item) => sum + item.priceAfterDiscount, 0));
     const gstTotal = round(normalizedItems.reduce((sum, item) => sum + item.itemGstAmount, 0));
 
     // 2. Packaging charge (per product × quantity)
@@ -314,7 +345,13 @@ async function calculateOrderPrice({
       : 0;
 
     // 5. Coupon / discount
-    const couponResult = await validateAndApplyCoupon({ couponCode, itemTotal, restaurantId, userId, deliveryFee });
+    const couponResult = await validateAndApplyCoupon({
+      couponCode,
+      itemTotal,
+      restaurantId,
+      userId,
+      discountBase: round(deliveryFee + platformFee),
+    });
     const discount = round(couponResult.discount);
     const safeDeliveryFee = resolveDeliveryFee({
       distanceKm: deliveryDistance,
@@ -325,13 +362,15 @@ async function calculateOrderPrice({
     });
 
     // 6. Canonical restaurant billing + platform settlement breakdown
-    const effectiveFoodGstPercent = itemTotal > 0 ? round((gstTotal / itemTotal) * 100) : adminSettings.defaultGstPercent;
+    const effectiveFoodGstPercent = priceAfterRestaurantDiscount > 0
+      ? round((gstTotal / priceAfterRestaurantDiscount) * 100)
+      : adminSettings.defaultGstPercent;
     const packagingGstPercent = packaging > 0 ? round((packagingGstTotal / packaging) * 100) : 0;
     const discountGstPercent = adminSettings.defaultGstPercent;
     const estimatedAdminCommission = round(normalizedItems.reduce((sum, item) => sum + item.adminCommissionAmount, 0));
     const settlement = calculateSettlementBreakdown({
       itemTotal,
-      restaurantDiscount: 0,
+      restaurantDiscount: restaurantDiscountTotal,
       foodGstPercent: effectiveFoodGstPercent,
       packagingCharge: packaging,
       packagingGstPercent,
@@ -365,6 +404,7 @@ async function calculateOrderPrice({
       breakdown: {
         itemTotal: settlement.itemTotal,
         restaurantDiscount: settlement.restaurantDiscount,
+        priceAfterRestaurantDiscount: settlement.priceAfterRestaurantDiscount,
         gstOnFood: settlement.gstOnFood,
         gst: gstTotalForOrder,
         tax: gstTotalForOrder,
@@ -404,7 +444,7 @@ async function calculateOrderPrice({
 
 // ─── Coupon validation (unchanged) ───────────────────────────────────────────
 
-async function validateAndApplyCoupon({ couponCode, itemTotal, restaurantId, userId, deliveryFee }) {
+async function validateAndApplyCoupon({ couponCode, itemTotal, restaurantId, userId, discountBase = 0 }) {
   if (!couponCode) return { discount: 0, freeDelivery: false, error: null };
 
   const promo = await Promocode.findOne({ code: couponCode, status: 'active' });
@@ -442,17 +482,18 @@ async function validateAndApplyCoupon({ couponCode, itemTotal, restaurantId, use
     return { discount: 0, freeDelivery: false, error: 'Coupon usage limit reached' };
   }
 
+  const eligibleDiscountBase = round(Math.max(0, discountBase));
   let discount = 0;
   let freeDelivery = false;
   if (promo.offerType === 'percent') {
-    discount = (itemTotal * promo.discountValue) / 100;
+    discount = (eligibleDiscountBase * promo.discountValue) / 100;
     if (promo.maxDiscountAmount > 0) discount = Math.min(discount, promo.maxDiscountAmount);
   } else if (promo.offerType === 'flat' || promo.offerType === 'amount') {
     discount = promo.discountValue;
   } else if (promo.offerType === 'free_delivery') {
     freeDelivery = true;
   }
-  discount = Math.min(discount, itemTotal);
+  discount = Math.min(discount, eligibleDiscountBase);
   return { discount, freeDelivery, error: null };
 }
 

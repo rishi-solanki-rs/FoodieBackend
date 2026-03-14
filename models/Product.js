@@ -52,15 +52,6 @@ const productSchema = new mongoose.Schema(
       default: null,
     },
 
-    // Restaurant commission percent for this item (what restaurant earns)
-    // If null/undefined, order flow falls back to default calculation
-    restaurantCommissionPercent: {
-      type: Number,
-      min: 0,
-      max: 100,
-      default: null,
-    },
-
     // Packaging charge per item (flat amount)
     packagingCharge: {
       type: Number,
@@ -95,20 +86,6 @@ const productSchema = new mongoose.Schema(
       setBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, // restaurant owner
     },
 
-    // ── Admin discount (campaigns / platform promotions, admin-only) ─────────
-    adminDiscount: {
-      type: {
-        type: String,
-        enum: ['percent', 'flat'],
-        default: 'percent',
-      },
-      value: { type: Number, default: 0, min: 0 },   // e.g. 10 = 10% or ₹10 flat
-      reason: { type: String, default: '' },          // e.g. "Festival offer"
-      active: { type: Boolean, default: false },
-      setAt: { type: Date },
-      setBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, // admin
-    },
-
     // ── Availability & approval ────────────────────────────────────────────
     available: { type: Boolean, default: true },
     isApproved: { type: Boolean, default: false },
@@ -120,7 +97,7 @@ const productSchema = new mongoose.Schema(
     approvalNotes: { type: String },
 
     // ── Pending updates (restaurant-proposed, needs admin approval) ─────────
-    // NOTE: adminDiscount and hsnCode are NOT in pendingUpdate — admin controls those directly.
+    // NOTE: hsnCode is NOT in pendingUpdate — admin controls it directly.
     // restaurantDiscount IS included so discount changes also go through approval.
     pendingUpdate: {
       type: {

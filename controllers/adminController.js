@@ -263,7 +263,7 @@ exports.getRestaurantMenuAdmin = async (req, res) => {
       filter.pendingUpdate = { $exists: false };
     }
     const products = await Product.find(filter)
-      .select("_id name description basePrice isApproved approvalNotes approvedAt pendingUpdate pendingUpdateAt restaurant category available image seasonal seasonTag variations addOns createdAt quantity unit hsnCode gstPercent adminCommissionPercent restaurantCommissionPercent packagingCharge packagingGstPercent restaurantDiscount adminDiscount")
+      .select("_id name description basePrice isApproved approvalNotes approvedAt pendingUpdate pendingUpdateAt restaurant category available image seasonal seasonTag variations addOns createdAt quantity unit hsnCode gstPercent adminCommissionPercent packagingCharge packagingGstPercent restaurantDiscount")
       .populate('category', 'name description image isActive')
       .sort({ createdAt: -1 })
       .lean();
@@ -632,43 +632,9 @@ exports.rejectProduct = async (req, res) => {
  */
 exports.setProductDiscount = async (req, res) => {
   try {
-    const { id } = req.params;
-    const { type, value, reason, active } = req.body;
-
-    const product = await Product.findById(id);
-    if (!product) return res.status(404).json({ success: false, message: "Product not found" });
-
-    // Validate type
-    const discountType = type === 'flat' ? 'flat' : 'percent';
-
-    // Validate value
-    const discountValue = Number(value ?? 0);
-    if (isNaN(discountValue) || discountValue < 0) {
-      return res.status(400).json({ success: false, message: "Discount value must be a non-negative number" });
-    }
-    if (discountType === 'percent' && discountValue > 100) {
-      return res.status(400).json({ success: false, message: "Percent discount cannot exceed 100%" });
-    }
-
-    // Setting value to 0 = effectively removing the discount
-    const isActive = active !== undefined ? (active === true || active === 'true') : discountValue > 0;
-
-    product.adminDiscount = {
-      type: discountType,
-      value: discountValue,
-      reason: reason ? String(reason).trim() : (product.adminDiscount?.reason || ''),
-      active: isActive,
-      setAt: new Date(),
-      setBy: req.user._id,
-    };
-
-    await product.save();
-    return res.status(200).json({
-      success: true,
-      message: discountValue > 0 && isActive ? `Admin discount of ${discountValue}${discountType === 'percent' ? '%' : '₹'} set on product` : 'Admin discount removed',
-      productId: product._id,
-      productName: product.name?.en || product.name,
-      adminDiscount: product.adminDiscount,
+    return res.status(400).json({
+      success: false,
+      message: "Product-level admin discount is deprecated. Use coupon codes for platform discounts.",
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -1075,7 +1041,7 @@ exports.getAllPendingMenuItems = async (req, res) => {
     const products = await Product.find(filter)
       .populate("restaurant", "name city owner")
       .populate("category", "name description image")
-      .select("_id name description basePrice isApproved approvalNotes pendingUpdate pendingUpdateAt restaurant category available image variations addOns createdAt quantity hsnCode gstPercent adminCommissionPercent restaurantCommissionPercent packagingCharge packagingGstPercent restaurantDiscount adminDiscount seasonal seasonTag")
+      .select("_id name description basePrice isApproved approvalNotes pendingUpdate pendingUpdateAt restaurant category available image variations addOns createdAt quantity hsnCode gstPercent adminCommissionPercent packagingCharge packagingGstPercent restaurantDiscount seasonal seasonTag")
       .sort({ [sortBy]: -1 })
       .skip(skip)
       .limit(parseInt(limit))
@@ -1173,11 +1139,9 @@ exports.getPendingMenusByRestaurant = async (req, res) => {
               hsnCode: "$hsnCode",
               gstPercent: "$gstPercent",
               adminCommissionPercent: "$adminCommissionPercent",
-              restaurantCommissionPercent: "$restaurantCommissionPercent",
               packagingCharge: "$packagingCharge",
               packagingGstPercent: "$packagingGstPercent",
               restaurantDiscount: "$restaurantDiscount",
-              adminDiscount: "$adminDiscount",
               variations: "$variations",
               addOns: "$addOns",
               pendingUpdate: "$pendingUpdate",

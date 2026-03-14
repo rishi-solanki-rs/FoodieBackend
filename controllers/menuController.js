@@ -50,13 +50,11 @@ const getOwnerRestaurant = async (userId) => {
 /**
  * Compute discount display fields for a product.
  * Rules:
- *  - If both adminDiscount and restaurantDiscount are active, show the higher one.
- *  - If only one is active, show that one.
- *  - finalDiscount is the effective percent (or flat ₹ value) to display.
+ *  - Only restaurantDiscount is considered for product-level discount display.
+ *  - Platform/admin discounts are coupon-based and not stored on products.
  *  - discountTag is the human-readable label e.g. "10% OFF".
  */
 function computeDiscountFields(product) {
-  const ad = product.adminDiscount;
   const rd = product.restaurantDiscount;
   const isDiscountActive = (discount) => {
     if (!discount) return false;
@@ -68,37 +66,12 @@ function computeDiscountFields(product) {
     return discount.active === true || discount.active === 'true';
   };
 
-  const adActive = isDiscountActive(ad);
   const rdActive = isDiscountActive(rd);
-
-  // Normalise to a comparable numeric value (for flat, use raw; for percent, use raw)
-  const adVal = adActive ? Number(ad.value) : 0;
   const rdVal = rdActive ? Number(rd.value) : 0;
 
-  let finalDiscount = 0;
-  let finalDiscountType = 'percent';
-  let discountSource = null; // 'admin' | 'restaurant' | null
-
-  if (adActive && rdActive) {
-    // Both active: pick the higher value (same type preferred; if mixed, both are shown raw)
-    if (adVal >= rdVal) {
-      finalDiscount = adVal;
-      finalDiscountType = ad.type || 'percent';
-      discountSource = 'admin';
-    } else {
-      finalDiscount = rdVal;
-      finalDiscountType = rd.type || 'percent';
-      discountSource = 'restaurant';
-    }
-  } else if (adActive) {
-    finalDiscount = adVal;
-    finalDiscountType = ad.type || 'percent';
-    discountSource = 'admin';
-  } else if (rdActive) {
-    finalDiscount = rdVal;
-    finalDiscountType = rd.type || 'percent';
-    discountSource = 'restaurant';
-  }
+  const finalDiscount = rdActive ? rdVal : 0;
+  const finalDiscountType = rdActive ? (rd.type || 'percent') : 'percent';
+  const discountSource = rdActive ? 'restaurant' : null;
 
   const discountTag = finalDiscount > 0
     ? (finalDiscountType === 'percent' ? `${finalDiscount}% OFF` : `₹${finalDiscount} OFF`)
@@ -106,7 +79,6 @@ function computeDiscountFields(product) {
 
   return {
     restaurantDiscount: rdActive ? { type: rd.type, value: rdVal } : null,
-    adminDiscount: adActive ? { type: ad.type, value: adVal, reason: ad.reason || '' } : null,
     finalDiscount,
     finalDiscountType,
     discountSource,
@@ -144,7 +116,7 @@ exports.addFoodItem = async (req, res) => {
       packagingCharge,  // Packaging charge per item
       packagingGstPercent, // GST on packaging
       restaurantDiscount, // Restaurant-set discount — allowed here
-      // NOTE: `adminDiscount`, `adminCommissionPercent`, `restaurantCommissionPercent` are admin-only
+      // NOTE: `adminCommissionPercent` is admin-only
       variations,
       addOns,
     } = req.body;
@@ -216,7 +188,6 @@ exports.addFoodItem = async (req, res) => {
       variations: normalizedVariations,
       addOns: normalizedAddOns,
       isApproved: false,
-      // adminDiscount is NOT set here — only admin can set it
     };
 
     // Validate and apply restaurantDiscount if provided

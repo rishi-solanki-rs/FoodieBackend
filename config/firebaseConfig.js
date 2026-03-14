@@ -1,10 +1,15 @@
 const admin = require("firebase-admin");
 const path = require("path");
 const fs = require("fs");
+
 let firebaseInitialized = false;
+
 try {
   const serviceAccountPath = path.join(__dirname, "serviceAccountKey.json");
-  if (fs.existsSync(serviceAccountPath)) {
+  if (admin.apps.length > 0) {
+    firebaseInitialized = true;
+    console.log("ℹ️ Firebase Admin SDK already initialized. Reusing existing app.");
+  } else if (fs.existsSync(serviceAccountPath)) {
     const serviceAccount = require(serviceAccountPath);
     admin.initializeApp({
       credential: admin.credential.cert(serviceAccount),
@@ -19,6 +24,7 @@ try {
 } catch (error) {
   console.error(" Error initializing Firebase Admin SDK:", error.message);
 }
+
 module.exports = {
   admin: firebaseInitialized ? admin : null,
   isInitialized: firebaseInitialized,

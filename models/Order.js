@@ -18,6 +18,11 @@ function splitGst(total) {
 function normalizePaymentBreakdown(pb) {
   if (!pb || typeof pb !== 'object') return;
 
+  pb.priceAfterRestaurantDiscount = roundMoney(
+    pb.priceAfterRestaurantDiscount ?? pb.taxableAmountFood ?? ((pb.itemTotal || 0) - (pb.restaurantDiscount || 0)),
+  );
+  pb.taxableAmountFood = roundMoney(pb.taxableAmountFood ?? pb.priceAfterRestaurantDiscount);
+
   const foodSplit = splitGst(pb.gstOnFood || 0);
   pb.cgstOnFood = foodSplit.cgst;
   pb.sgstOnFood = foodSplit.sgst;
@@ -102,6 +107,11 @@ const orderSchema = new mongoose.Schema(
         basePrice: { type: Number, default: 0 },
         variationPrice: { type: Number, default: 0 },
         addonPrice: { type: Number, default: 0 },
+        originalPrice: { type: Number, default: 0 },
+        restaurantDiscountPercent: { type: Number, default: 0 },
+        restaurantDiscountAmount: { type: Number, default: 0 },
+        priceAfterDiscount: { type: Number, default: 0 },
+        gstOnDiscountedPrice: { type: Number, default: 0 },
         price: Number,
         lineTotal: { type: Number, default: 0 },
         gstPercent: { type: Number, default: 0 },
@@ -130,6 +140,7 @@ const orderSchema = new mongoose.Schema(
     paymentBreakdown: {
       itemTotal: { type: Number, default: 0 },
       restaurantDiscount: { type: Number, default: 0 },
+      priceAfterRestaurantDiscount: { type: Number, default: 0 },
       gstOnFood: { type: Number, default: 0 },
       packagingCharge: { type: Number, default: 0 },
       packagingGST: { type: Number, default: 0 },
@@ -137,7 +148,7 @@ const orderSchema = new mongoose.Schema(
       foodierDiscount: { type: Number, default: 0 },
       gstOnDiscount: { type: Number, default: 0 },
       // finalPayableToRestaurant = customer-facing: what customer pays toward restaurant bill
-      //   (settlement formula: restaurantBillTotal − discounts + gstOnDiscount)
+      //   (settlement formula: restaurantBillTotal; platform coupons do not affect this)
       finalPayableToRestaurant: { type: Number, default: 0 },
       // Alias of finalPayableToRestaurant — explicit name for clarity
       customerRestaurantBill: { type: Number, default: 0 },

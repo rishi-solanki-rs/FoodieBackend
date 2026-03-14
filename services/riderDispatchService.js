@@ -58,7 +58,7 @@ exports.findAndNotifyRider = async (orderId) => {
             : ((order.riderEarnings?.deliveryCharge || 0)
                 + (order.riderEarnings?.platformFee || 0)
                 + (order.riderEarnings?.incentive || 0)
-                + (order.riderEarnings?.tip ?? order.tip || 0));
+                + (order.riderEarnings?.tip ?? order.tip ?? 0));
 
         // Create RideRequests for all riders
         const rideRequestResults = await Promise.allSettled(

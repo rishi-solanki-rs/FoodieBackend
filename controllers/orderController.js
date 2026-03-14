@@ -145,6 +145,7 @@ const calculateBill = async (
     return {
       itemTotal: breakdown.itemTotal,
       restaurantDiscount: breakdown.restaurantDiscount || 0,
+      priceAfterRestaurantDiscount: breakdown.priceAfterRestaurantDiscount || Math.max(0, (breakdown.itemTotal || 0) - (breakdown.restaurantDiscount || 0)),
       gstOnFood: breakdown.gstOnFood || 0,
       tax: breakdown.tax,
       packaging: breakdown.packaging,
@@ -306,11 +307,15 @@ exports.placeOrder = async (req, res) => {
       const calculatedItem = calculatedItems[index] || {};
       const fullUnitPrice = toMoney(Number(calculatedItem.unitPrice ?? item.price) || 0);
       const lineTotal = toMoney(Number(calculatedItem.lineTotal) || (fullUnitPrice * (Number(item.quantity) || 0)));
+      const originalPrice = toMoney(Number(calculatedItem.originalPrice ?? lineTotal) || 0);
+      const restaurantDiscountAmount = toMoney(Number(calculatedItem.restaurantDiscountAmount) || 0);
+      const restaurantDiscountPercent = toMoney(Number(calculatedItem.restaurantDiscountPercent) || 0);
+      const priceAfterDiscount = toMoney(Number(calculatedItem.priceAfterDiscount) || Math.max(0, originalPrice - restaurantDiscountAmount));
       const commissionPercent = Number.isFinite(Number(calculatedItem.commissionPercent))
         ? Number(calculatedItem.commissionPercent)
         : defaultCommissionPercent;
       const itemAdminCommission = toMoney(
-        Number(calculatedItem.adminCommissionAmount) || (lineTotal * (commissionPercent / 100)),
+        Number(calculatedItem.adminCommissionAmount) || (priceAfterDiscount * (commissionPercent / 100)),
       );
       const itemAdminCommissionGst = toMoney(
         Number(calculatedItem.adminCommissionGstAmount) || (itemAdminCommission * (adminCommissionGstPercent / 100)),
@@ -321,14 +326,14 @@ exports.placeOrder = async (req, res) => {
       );
 
       const itemGstPercent = Number(calculatedItem.gstPercent ?? item.gstPercent ?? 0);
-      const itemGstAmount = toMoney(Number(calculatedItem.itemGstAmount) || (lineTotal * (itemGstPercent / 100)));
+      const itemGstAmount = toMoney(Number(calculatedItem.gstOnDiscountedPrice ?? calculatedItem.itemGstAmount) || (priceAfterDiscount * (itemGstPercent / 100)));
       const itemCgst = toMoney(Number(calculatedItem.cgst) || (itemGstAmount / 2));
       const itemSgst = toMoney(Number(calculatedItem.sgst) || (itemGstAmount - itemCgst));
       const itemRestaurantEarning = Math.max(
         0,
         toMoney(
           Number(calculatedItem.restaurantNetEarningAmount)
-          || (lineTotal + itemPackagingTotal - itemAdminCommission - itemAdminCommissionGst),
+          || (priceAfterDiscount + itemPackagingTotal - itemAdminCommission - itemAdminCommissionGst),
         ),
       );
 
@@ -343,6 +348,11 @@ exports.placeOrder = async (req, res) => {
         basePrice: Number(calculatedItem.basePrice ?? Math.max(0, fullUnitPrice - (Number(calculatedItem.variationPrice) || 0) - (Number(calculatedItem.addonPrice) || 0))) || 0,
         variationPrice: Number(calculatedItem.variationPrice || 0),
         addonPrice: Number(calculatedItem.addonPrice || 0),
+        originalPrice,
+        restaurantDiscountPercent,
+        restaurantDiscountAmount,
+        priceAfterDiscount,
+        gstOnDiscountedPrice: itemGstAmount,
         price: fullUnitPrice,
         lineTotal,
         gstPercent: itemGstPercent,
@@ -367,7 +377,9 @@ exports.placeOrder = async (req, res) => {
     const canonicalSettlement = calculateSettlementBreakdown({
       itemTotal: bill.itemTotal || 0,
       restaurantDiscount: bill.restaurantDiscount || 0,
-      foodGstPercent: bill.itemTotal > 0 ? ((bill.gstOnFood || 0) / bill.itemTotal) * 100 : 0,
+      foodGstPercent: (bill.priceAfterRestaurantDiscount || 0) > 0
+        ? ((bill.gstOnFood || 0) / bill.priceAfterRestaurantDiscount) * 100
+        : 0,
       packagingCharge: bill.packaging || 0,
       packagingGstPercent: (bill.packaging || 0) > 0 ? ((bill.packagingGST || 0) / bill.packaging) * 100 : 0,
       foodierDiscount: bill.foodierDiscount || bill.discount || 0,
@@ -466,6 +478,7 @@ exports.placeOrder = async (req, res) => {
       totalAmount: bill.toPay,
       paymentBreakdown: {
         ...canonicalSettlement,
+        priceAfterRestaurantDiscount: toMoney(canonicalSettlement.priceAfterRestaurantDiscount || 0),
         deliveryCharge: riderEarningsData.deliveryCharge,
         finalPayableToRestaurant: customerRestaurantBill,
         customerRestaurantBill,
@@ -3114,7 +3127,7 @@ const buildBillingSectionsFromOrder = (orderLike) => {
   const itemsTotal = asAmount(pb.itemTotal ?? order.itemTotal ?? 0);
   const restaurantDiscount = asAmount(pb.restaurantDiscount ?? 0);
   const platformDiscount = asAmount(pb.foodierDiscount ?? order.discount ?? 0);
-  const subTotal = asAmount(Math.max(0, itemsTotal - restaurantDiscount - platformDiscount));
+  const subTotal = asAmount(Math.max(0, itemsTotal - restaurantDiscount));
 
   const gstOnFood = asAmount(pb.gstOnFood ?? 0);
   const cgstFood = asAmount(pb.cgstOnFood ?? (gstOnFood / 2));

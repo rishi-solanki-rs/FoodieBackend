@@ -40,9 +40,24 @@ function validateOrderFinancialIntegrity(orderLike) {
 
   // 3) gstOnFood must equal sum(items.itemGstAmount)
   if (items.length > 0) {
-    const summedFoodGst = r2(items.reduce((sum, item) => sum + Number(item?.itemGstAmount || 0), 0));
+    const summedFoodGst = r2(
+      items.reduce((sum, item) => sum + Number((item?.gstOnDiscountedPrice ?? item?.itemGstAmount) || 0), 0),
+    );
     if (!nearlyEqual(pb.gstOnFood || 0, summedFoodGst)) {
-      issues.push('gstOnFood mismatch: sum(items.itemGstAmount) != paymentBreakdown.gstOnFood');
+      issues.push('gstOnFood mismatch: sum(items.gstOnDiscountedPrice) != paymentBreakdown.gstOnFood');
+    }
+  }
+
+  // 3h) discounted food base integrity
+  if (items.length > 0) {
+    const summedAfterDiscount = r2(items.reduce((sum, item) => sum + Number(item?.priceAfterDiscount || 0), 0));
+    const expectedAfterDiscount = r2((pb.itemTotal || order.itemTotal || 0) - (pb.restaurantDiscount || 0));
+    const storedAfterDiscount = r2(pb.priceAfterRestaurantDiscount ?? pb.taxableAmountFood ?? expectedAfterDiscount);
+    if (!nearlyEqual(storedAfterDiscount, summedAfterDiscount)) {
+      issues.push('discounted food base mismatch: sum(items.priceAfterDiscount) != paymentBreakdown.priceAfterRestaurantDiscount');
+    }
+    if (!nearlyEqual(storedAfterDiscount, expectedAfterDiscount)) {
+      issues.push('discounted food base mismatch: itemTotal - restaurantDiscount != paymentBreakdown.priceAfterRestaurantDiscount');
     }
   }
 
@@ -111,11 +126,11 @@ function validateOrderFinancialIntegrity(orderLike) {
   }
 
   // 5) Discount distribution integrity
-  if (!nearlyEqual(
-    (pb.platformDiscountUsed || 0) + (pb.restaurantDiscountUsed || 0),
-    pb.foodierDiscount || 0,
-  )) {
-    issues.push('discount distribution mismatch: platformDiscountUsed + restaurantDiscountUsed != foodierDiscount');
+  if (!nearlyEqual(pb.platformDiscountUsed || 0, pb.foodierDiscount || 0)) {
+    issues.push('platform discount mismatch: platformDiscountUsed != foodierDiscount');
+  }
+  if (!nearlyEqual(pb.restaurantDiscountUsed || 0, pb.restaurantDiscount || 0)) {
+    issues.push('restaurant discount mismatch: restaurantDiscountUsed != restaurantDiscount');
   }
 
   // 6) Rider earnings integrity (canonical fields only)

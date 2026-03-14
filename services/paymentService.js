@@ -338,16 +338,22 @@ function getSettlementSnapshot(order, restaurant, distanceInfo) {
 
   // ── Admin commission ──────────────────────────────────────────────────────
   // Canonical source is paymentBreakdown total deduction minus commission GST.
-  const commissionPercent = Number(restaurant?.adminCommission || DEFAULT_COMMISSION_PERCENT);
+  const commissionPercent = Number(
+    order?.items?.[0]?.commissionPercent
+    || DEFAULT_COMMISSION_PERCENT,
+  );
   const commissionAmount = Number.isFinite(Number(paymentBreakdown?.totalAdminCommissionDeduction))
     ? Number(paymentBreakdown.totalAdminCommissionDeduction) - Number(paymentBreakdown.adminCommissionGst || 0)
-    : Math.round((Math.max(0, itemTotal + packagingCharge) * (Math.max(0, commissionPercent) / 100)) * 100) / 100;
+    : Math.round((Math.max(0, Number(paymentBreakdown?.priceAfterRestaurantDiscount ?? paymentBreakdown?.taxableAmountFood ?? itemTotal)) * (Math.max(0, commissionPercent) / 100)) * 100) / 100;
 
   // ── Restaurant net earning ────────────────────────────────────────────────
   // Formula: (itemTotal + packaging) - adminCommission
   // GST, deliveryFee, and platformFee are NOT restaurant earnings
-  const restaurantGross = itemTotal + packagingCharge;
-  const restaurantNet = Math.max(0, Math.round((restaurantGross - commissionAmount) * 100) / 100);
+  const taxableFoodBase = Number(paymentBreakdown?.priceAfterRestaurantDiscount ?? paymentBreakdown?.taxableAmountFood ?? itemTotal);
+  const restaurantGross = taxableFoodBase + packagingCharge;
+  const restaurantNet = Number.isFinite(Number(paymentBreakdown?.restaurantNet))
+    ? Number(paymentBreakdown.restaurantNet)
+    : Math.max(0, Math.round((restaurantGross - commissionAmount - Number(paymentBreakdown?.adminCommissionGst || 0)) * 100) / 100);
 
   // ── Delivery fee ──────────────────────────────────────────────────────────
   const settlementDeliveryFee = Number.isFinite(Number(order?.deliveryFee))

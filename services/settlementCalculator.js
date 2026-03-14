@@ -14,11 +14,9 @@ function clamp(value, min, max) {
  * Canonical settlement breakdown calculator.
  * All billing and settlement modules should use this to avoid formula drift.
  *
- * Discount distribution rule: coupon discount absorbs the platform bill
- * (deliveryFee + platformFee) first; only the remainder reduces the restaurant
- * bill. This correctly separates the two invoice sections and ensures GST
- * reversal is only applied to the restaurant-side discount (platform fees
- * are zero-rated).
+ * Discount distribution rule: coupon discount is a platform discount only.
+ * It can reduce only the platform bill (delivery + platform fee and their GST)
+ * and never reduces restaurant bill amounts.
  */
 function calculateSettlementBreakdown({
   itemTotal = 0,
@@ -65,25 +63,21 @@ function calculateSettlementBreakdown({
   const cgstDelivery = round(deliveryGst / 2);
   const sgstDelivery = round(deliveryGst - cgstDelivery);
 
-  // ── Platform-first discount distribution ───────────────────────────────────
-  // Coupon discount first absorbs the platform bill; remainder reduces restaurant bill.
-  const totalDiscountable = round(restaurantBillTotal + platformComponents);
-  const safeFoodierDiscount = round(clamp(foodierDiscount, 0, totalDiscountable));
-  const platformDiscountUsed = round(clamp(safeFoodierDiscount, 0, platformComponents));
-  const restaurantDiscountUsed = round(safeFoodierDiscount - platformDiscountUsed);
-
-  // GST reversal only on restaurant-side discount (platform fees are zero-rated)
-  const gstOnDiscount = round(restaurantDiscountUsed * (Math.max(0, discountGstPercent) / 100));
-  const finalPayableToRestaurant = round(
-    restaurantBillTotal - restaurantDiscountUsed + gstOnDiscount,
-  );
-
-  // Platform bill after discount absorption
-  const taxablePlatformAmount = round(platformComponents - platformDiscountUsed);
+  // ── Platform discount distribution ─────────────────────────────────────────
+  // Coupons are platform-only and cannot alter restaurant-side billing.
+  const taxablePlatformAmount = round(platformComponents);
   const gstOnPlatform = round(taxablePlatformAmount * (Math.max(0, platformGstPercent) / 100));
   const cgstPlatform = round(gstOnPlatform / 2);
   const sgstPlatform = round(gstOnPlatform - cgstPlatform);
-  const platformBillTotal = round(taxablePlatformAmount + gstOnPlatform + deliveryGst);
+  const platformBillBeforeDiscount = round(taxablePlatformAmount + gstOnPlatform + deliveryGst);
+  const safeFoodierDiscount = round(clamp(foodierDiscount, 0, platformBillBeforeDiscount));
+  const platformDiscountUsed = safeFoodierDiscount;
+  const restaurantDiscountUsed = safeRestaurantDiscount;
+
+  // Coupon discount is applied after GST on platform bill and does not alter GST components.
+  const gstOnDiscount = 0;
+  const finalPayableToRestaurant = restaurantBillTotal;
+  const platformBillTotal = round(platformBillBeforeDiscount - platformDiscountUsed);
 
   // ── Canonical settlement fields ───────────────────────────────────────────
   // Business rule:
@@ -126,6 +120,7 @@ function calculateSettlementBreakdown({
     // ── Restaurant bill ───────────────────────────────────────────────────────
     itemTotal: safeItemTotal,
     restaurantDiscount: safeRestaurantDiscount,
+    priceAfterRestaurantDiscount: taxableAmountFood,
     taxableAmountFood,
     gstOnFood,
     cgstOnFood,
@@ -147,6 +142,7 @@ function calculateSettlementBreakdown({
     sgstDelivery,
     deliveryChargeGstPercent: safeDeliveryChargeGstPercent,
     platformFee: safePlatformFee,
+    platformBillBeforeDiscount,
     taxablePlatformAmount,
     gstOnPlatform,
     cgstPlatform,
@@ -168,7 +164,7 @@ function calculateSettlementBreakdown({
     restaurantNetEarning,
     customerRestaurantBill,
     computedAt: new Date(),
-    computedVersion: "settlement-v2",
+    computedVersion: "settlement-v3",
   };
 }
 

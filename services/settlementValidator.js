@@ -59,7 +59,9 @@ async function validateSettlement(orderId) {
   const riderTip = Number((order.riderEarnings?.tip ?? order.tip) || 0);
 
   // ── Expected values ────────────────────────────────────────────────────────
-  const expectedRestaurantNet = Math.max(0, Math.round(((pb.restaurantGross || itemTotal) - adminCommission - adminCommissionGst) * 100) / 100);
+  const taxableFoodBase = Number((pb.priceAfterRestaurantDiscount ?? pb.taxableAmountFood ?? (itemTotal - (pb.restaurantDiscount || 0))) || 0);
+  const packagingCharge = Number(pb.packagingCharge || order.packaging || 0);
+  const expectedRestaurantNet = Math.max(0, Math.round((taxableFoodBase + packagingCharge - adminCommission - adminCommissionGst) * 100) / 100);
   const expectedRiderEarning = Math.max(0, Math.round((deliveryCharge + platformFee + riderIncentive + riderTip) * 100) / 100);
 
   // ── Stored values ──────────────────────────────────────────────────────────

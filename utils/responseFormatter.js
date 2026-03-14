@@ -100,7 +100,6 @@ exports.formatRestaurantForAdmin = (restaurant) => {
 exports.formatProductForUser = (product) => {
   if (!product) return null;
 
-  const ad = product.adminDiscount;
   const rd = product.restaurantDiscount;
   const isDiscountActive = (discount) => {
     if (!discount) return false;
@@ -112,21 +111,11 @@ exports.formatProductForUser = (product) => {
     return discount.active === true || discount.active === 'true';
   };
 
-  const adActive = isDiscountActive(ad);
   const rdActive = isDiscountActive(rd);
-  const adVal = adActive ? Number(ad.value) : 0;
   const rdVal = rdActive ? Number(rd.value) : 0;
 
-  let finalDiscount = 0;
-  let finalDiscountType = 'percent';
-  if (adActive && rdActive) {
-    if (adVal >= rdVal) { finalDiscount = adVal; finalDiscountType = ad.type || 'percent'; }
-    else { finalDiscount = rdVal; finalDiscountType = rd.type || 'percent'; }
-  } else if (adActive) {
-    finalDiscount = adVal; finalDiscountType = ad.type || 'percent';
-  } else if (rdActive) {
-    finalDiscount = rdVal; finalDiscountType = rd.type || 'percent';
-  }
+  const finalDiscount = rdActive ? rdVal : 0;
+  const finalDiscountType = rdActive ? (rd.type || 'percent') : 'percent';
 
   const discountTag = finalDiscount > 0
     ? (finalDiscountType === 'percent' ? `${finalDiscount}% OFF` : `₹${finalDiscount} OFF`)
@@ -146,7 +135,6 @@ exports.formatProductForUser = (product) => {
     seasonal: product.seasonal || false,
     seasonTag: product.seasonTag,
     restaurantDiscount: rdActive ? { type: rd.type, value: rdVal } : null,
-    adminDiscount: adActive ? { type: ad.type, value: adVal, reason: ad.reason || '' } : null,
     finalDiscount,
     finalDiscountType,
     discountTag,
