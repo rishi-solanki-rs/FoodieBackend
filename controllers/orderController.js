@@ -430,6 +430,8 @@ exports.placeOrder = async (req, res) => {
       packagingCharge: bill.packaging || 0,
       packagingGstPercent: (bill.packaging || 0) > 0 ? ((bill.packagingGST || 0) / bill.packaging) * 100 : 0,
       foodierDiscount: bill.foodierDiscount || bill.discount || 0,
+      couponType: bill.couponType || null,
+      freeDelivery: String(bill.couponType || '').toLowerCase() === 'free_delivery',
       discountGstPercent: adminSettings?.defaultGstPercent ?? 5,
       deliveryFee: bill.deliveryFee || 0,
       platformFee: bill.platformFee || 0,
