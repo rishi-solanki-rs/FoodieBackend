@@ -1,4 +1,3 @@
-
 let io;
 module.exports = {
   init: (socketIO) => {
@@ -36,10 +35,20 @@ module.exports = {
   },
   emitToRider: (riderId, event, data) => {
     if (!io) return;
+    if (process.env.NODE_ENV !== 'production') {
+      const room = `rider:${riderId}`;
+      const clients = io.sockets.adapter.rooms.get(room);
+      console.log(`📡 Emitting to ${room} (${clients ? clients.size : 0} clients) - Event: ${event}`, data);
+    }
     io.to(`rider:${riderId}`).emit(event, data);
   },
   emitToRiderByUserId: (userId, event, data) => {
     if (!io) return;
+    if (process.env.NODE_ENV !== 'production') {
+      const room = `rider:${userId}`;
+      const clients = io.sockets.adapter.rooms.get(room);
+      console.log(`📡 Emitting to ${room} (${clients ? clients.size : 0} clients) - Event: ${event}`, data);
+    }
     io.to(`rider:${userId}`).emit(event, data);
   },
   emitToZone: (zoneId, event, data) => {
