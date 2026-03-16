@@ -2138,20 +2138,26 @@ exports.searchRidersForOrder = async (req, res) => {
       order: order._id,
       status: { $in: ['timeout', 'rejected'] }
     });
-    const nearbyRiderCount = await Rider.countDocuments({
-      currentLocation: {
-        $near: {
-          $geometry: {
+    const nearbyRiderCountResult = await Rider.aggregate([
+      {
+        $geoNear: {
+          near: {
             type: "Point",
             coordinates: [restaurantCoords[0], restaurantCoords[1]],
           },
-          $maxDistance: 1000000, // Match dispatch service radius (1000km dev)
+          distanceField: "distance",
+          maxDistance: 1000000, // Match dispatch service radius (1000km dev)
+          spherical: true,
+          query: {
+            isOnline: true,
+            isAvailable: true,
+            verificationStatus: 'approved',
+          },
         },
       },
-      isOnline: true,
-      isAvailable: true,
-      verificationStatus: 'approved',
-    });
+      { $count: "count" },
+    ]);
+    const nearbyRiderCount = nearbyRiderCountResult[0]?.count || 0;
     if (nearbyRiderCount === 0) {
       logger.info('[SearchRiders] No online riders found, emitting no_rider_found immediately', {
         orderId: order._id,
