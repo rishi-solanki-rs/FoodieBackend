@@ -112,23 +112,39 @@ exports.findAndNotifyRider = async (orderId) => {
                 expiresIn: BATCH_TIMEOUT_MS / 1000
             };
 
-            const riderRoomId = `rider:${rider.user.toString()}`;
+        //     const riderRoomId = `rider:${rider.user.toString()}`;
+        //     console.log(`  → 📤 Emitting to room: ${riderRoomId}`, {
+        //         orderId: order._id.toString(),
+        //         restaurantName: restaurant.name,
+        //         earnings: riderEarning,
+        //         timestamp: new Date().toISOString(),
+        //     });
+            
+        //     socketService.emitToRider(rider.user.toString(), 'rider:new_order_request', requestData);
+        //     sendNotification(
+        //         rider.user._id || rider.user,
+        //         '🚀 New Delivery Request!',
+        //         `Earn ₹${riderEarning} — ${restaurant.name} → ${order.deliveryAddress?.area || 'Customer'}`,
+        //         { orderId: order._id.toString(), requestId: request._id.toString(), type: 'dispatch_request' }
+        //     ).catch(() => { }); // non-blocking
+        // }
+            const riderUserId = (rider.user && rider.user._id) ? rider.user._id.toString() : String(rider.user);
+            const riderRoomId = `rider:${riderUserId}`;
             console.log(`  → 📤 Emitting to room: ${riderRoomId}`, {
-                orderId: order._id.toString(),
-                restaurantName: restaurant.name,
-                earnings: riderEarning,
-                timestamp: new Date().toISOString(),
+              orderId: order._id.toString(),
+              restaurantName: restaurant.name,
+              earnings: riderEarning,
+              timestamp: new Date().toISOString(),
             });
             
-            socketService.emitToRider(rider.user.toString(), 'rider:new_order_request', requestData);
+            socketService.emitToRider(riderUserId, 'rider:new_order_request', requestData);
             sendNotification(
-                rider.user._id || rider.user,
+              riderUserId,
                 '🚀 New Delivery Request!',
                 `Earn ₹${riderEarning} — ${restaurant.name} → ${order.deliveryAddress?.area || 'Customer'}`,
                 { orderId: order._id.toString(), requestId: request._id.toString(), type: 'dispatch_request' }
             ).catch(() => { }); // non-blocking
         }
-
         // If no one accepts within timeout, re-trigger (in case new riders came online)
         setTimeout(async () => {
             await checkBatchTimeout(
@@ -354,7 +370,10 @@ exports.handleRiderResponse = async (riderUserId, requestId, action) => {
             for (const req of otherPendingRiders) {
                 const otherRider = await Rider.findById(req.rider).select('user');
                 if (otherRider) {
-                    socketService.emitToRider(otherRider.user.toString(), 'rider:order_taken', {
+                 const otherRiderUserId = (otherRider.user && otherRider.user._id)
+                        ? otherRider.user._id.toString()
+                        : String(otherRider.user);
+                    socketService.emitToRider(otherRiderUserId, 'rider:order_taken', {
                         orderId: targetOrder._id,
                         message: 'This order was accepted by another rider'
                     });
