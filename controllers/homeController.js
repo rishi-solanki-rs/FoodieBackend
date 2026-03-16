@@ -652,20 +652,19 @@ exports.getExploreRestaurants = async (req, res) => {
 };
 exports.getBanners = async (req, res) => {
   try {
-    const banners = await Banner.find({ isActive: true })
+    const banners = await Banner.find({ isActive: true, type: "restaurant", targetModel: "Restaurant" })
       .sort({ position: 1 })
-      .select("_id title image type targetId targetModel externalUrl navigationType")
+      .select("_id title image targetId")
       .lean();
 
     const normalized = banners.map((banner) => ({
       _id: banner._id,
       title: banner.title,
       image: banner.image,
-      type: banner.type,
+      type: "restaurant",
       targetId: banner.targetId || null,
-      targetModel: banner.targetModel || null,
-      externalUrl: banner.externalUrl || null,
-      navigationType: banner.navigationType || "none",
+      targetModel: "Restaurant",
+      navigationType: "restaurant",
     }));
 
     res.status(200).json({

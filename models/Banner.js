@@ -1,18 +1,7 @@
 const mongoose = require("mongoose");
 
 function resolveNavigationType(type) {
-  switch (type) {
-    case "restaurant":
-      return "restaurant";
-    case "item":
-      return "product";
-    case "category":
-      return "category";
-    case "external":
-      return "external";
-    default:
-      return "none";
-  }
+  return "restaurant";
 }
 
 const bannerSchema = new mongoose.Schema(
@@ -21,19 +10,19 @@ const bannerSchema = new mongoose.Schema(
     image: { type: String, required: true }, // URL
     type: {
       type: String,
-      enum: ["restaurant", "item", "category", "external", "static"],
-      default: "static",
+      enum: ["restaurant"],
+      default: "restaurant",
     },
-    targetId: { type: mongoose.Schema.Types.ObjectId, refPath: "targetModel" },
+    targetId: { type: mongoose.Schema.Types.ObjectId, ref: "Restaurant", required: true },
     targetModel: {
       type: String,
-      enum: ["Restaurant", "Product", "Category"],
+      enum: ["Restaurant"],
+      default: "Restaurant",
     },
-    externalUrl: { type: String, trim: true, default: null },
     navigationType: {
       type: String,
-      enum: ["restaurant", "product", "category", "external", "none"],
-      default: "none",
+      enum: ["restaurant"],
+      default: "restaurant",
     },
     isActive: { type: Boolean, default: true },
     position: { type: Number, default: 0 }, // For sorting order
@@ -42,22 +31,9 @@ const bannerSchema = new mongoose.Schema(
 );
 
 bannerSchema.pre("validate", function syncNavigationShape() {
+  this.type = "restaurant";
   this.navigationType = resolveNavigationType(this.type);
-
-  if (this.type === "external") {
-    this.targetId = undefined;
-    this.targetModel = undefined;
-  }
-
-  if (this.type === "static") {
-    this.targetId = undefined;
-    this.targetModel = undefined;
-    this.externalUrl = null;
-  }
-
-  if (this.type !== "external") {
-    this.externalUrl = null;
-  }
+  this.targetModel = "Restaurant";
 });
 
 module.exports = mongoose.model("Banner", bannerSchema);

@@ -8,25 +8,13 @@ const Cuisine = require('../models/Cuisine');
 const DocumentType = require('../models/DocumentType');
 const Banner = require('../models/Banner');
 const Restaurant = require('../models/Restaurant');
-const Product = require('../models/Product');
 const { getFileUrl } = require('../utils/upload');
 const { getPaginationParams, buildSearchQuery } = require('../utils/pagination');
 
 // MasterCategory functions removed - Use FoodCategory endpoints at /api/food-categories instead
 
 function resolveNavigationType(type) {
-    switch (type) {
-        case 'restaurant':
-            return 'restaurant';
-        case 'item':
-            return 'product';
-        case 'category':
-            return 'category';
-        case 'external':
-            return 'external';
-        default:
-            return 'none';
-    }
+    return 'restaurant';
 }
 
 function isRestaurantAvailableForBanner(restaurant) {
@@ -39,88 +27,32 @@ function isRestaurantAvailableForBanner(restaurant) {
 }
 
 async function validateBannerTarget(payload) {
-    const type = payload.type || 'static';
-
-    if (type === 'restaurant') {
-        if (payload.targetModel !== 'Restaurant') {
-            throw new Error('targetModel must be Restaurant for restaurant banner');
-        }
-        if (!payload.targetId) {
-            throw new Error('targetId is required for restaurant banner');
-        }
-        const restaurant = await Restaurant.findById(payload.targetId)
-            .select('restaurantApproved isApproved isActive isTemporarilyClosed accountStatus')
-            .lean();
-        if (!isRestaurantAvailableForBanner(restaurant)) {
-            throw new Error('Restaurant not available for banner');
-        }
+    if (payload.targetModel !== 'Restaurant') {
+        throw new Error('targetModel must be Restaurant for banner');
+    }
+    if (!payload.targetId) {
+        throw new Error('targetId is required for banner');
     }
 
-    if (type === 'item') {
-        if (payload.targetModel !== 'Product') {
-            throw new Error('targetModel must be Product for item banner');
-        }
-        if (!payload.targetId) {
-            throw new Error('targetId is required for item banner');
-        }
-
-        const product = await Product.findById(payload.targetId)
-            .select('available restaurant')
-            .populate({
-                path: 'restaurant',
-                select: 'restaurantApproved isApproved isActive isTemporarilyClosed accountStatus',
-            })
-            .lean();
-
-        if (!product || !product.available) {
-            throw new Error('Product not available for banner');
-        }
-        if (!isRestaurantAvailableForBanner(product.restaurant)) {
-            throw new Error('Product restaurant not available for banner');
-        }
-    }
-
-    if (type === 'category') {
-        if (payload.targetModel !== 'Category') {
-            throw new Error('targetModel must be Category for category banner');
-        }
-        if (!payload.targetId) {
-            throw new Error('targetId is required for category banner');
-        }
-        const category = await Category.findById(payload.targetId).select('_id').lean();
-        if (!category) {
-            throw new Error('Category not found for banner');
-        }
-    }
-
-    if (type === 'external') {
-        if (!payload.externalUrl) {
-            throw new Error('externalUrl is required for external banner');
-        }
+    const restaurant = await Restaurant.findById(payload.targetId)
+        .select('restaurantApproved isApproved isActive isTemporarilyClosed accountStatus')
+        .lean();
+    if (!isRestaurantAvailableForBanner(restaurant)) {
+        throw new Error('Restaurant not available for banner');
     }
 }
 
 function buildBannerPayload(input, image) {
-    const type = input.type || 'static';
     const payload = {
         title: input.title,
         image,
-        type,
+        type: 'restaurant',
         targetId: input.targetId || undefined,
-        targetModel: input.targetModel || undefined,
-        externalUrl: input.externalUrl || null,
-        navigationType: resolveNavigationType(type),
+        targetModel: 'Restaurant',
+        navigationType: resolveNavigationType('restaurant'),
         position: Number(input.position || 0),
         isActive: input.isActive !== undefined ? input.isActive : true,
     };
-
-    if (type === 'external' || type === 'static') {
-        payload.targetId = undefined;
-        payload.targetModel = undefined;
-    }
-    if (type !== 'external') {
-        payload.externalUrl = null;
-    }
     return payload;
 }
 
@@ -556,7 +488,11 @@ exports.getAllBanners = async (req, res) => {
     try {
         const { page, limit, skip } = getPaginationParams(req, 50);
         const search = req.query.search || '';
-        const query = buildSearchQuery(search, ['title', 'type']);
+        const query = {
+            ...buildSearchQuery(search, ['title', 'type']),
+            type: 'restaurant',
+            targetModel: 'Restaurant',
+        };
         const total = await Banner.countDocuments(query);
         const banners = await Banner.find(query)
             .skip(skip)

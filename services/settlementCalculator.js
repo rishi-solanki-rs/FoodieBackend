@@ -57,24 +57,50 @@ function calculateSettlementBreakdown({
   const safeDeliveryFee = round(Math.max(0, deliveryFee));
   const safePlatformFee = round(Math.max(0, platformFee));
   const safeDeliveryChargeGstPercent = round(Math.max(0, deliveryChargeGstPercent));
-  const deliveryGST = round(safeDeliveryFee * (safeDeliveryChargeGstPercent / 100));
+
+  // ── Platform discount distribution ─────────────────────────────────────────
+  // Coupons are platform-only: split proportionally across delivery fee and platform fee.
+  // GST is then recalculated on the post-discount amounts so the customer receives the
+  // correct tax benefit. Restaurant billing is never affected by coupons.
+  const platformChargesBase = round(safeDeliveryFee + safePlatformFee);
+  const safeFoodierDiscount = round(clamp(foodierDiscount, 0, platformChargesBase));
+  const platformDiscountUsed = safeFoodierDiscount; // total coupon discount (backwards-compat alias)
+  const restaurantDiscountUsed = safeRestaurantDiscount;
+
+  // Proportional split of coupon discount between delivery fee and platform fee
+  const deliveryDiscountUsed = platformChargesBase > 0
+    ? round(clamp((safeDeliveryFee / platformChargesBase) * safeFoodierDiscount, 0, safeDeliveryFee))
+    : 0;
+  const platformDiscountSplit = round(safeFoodierDiscount - deliveryDiscountUsed);
+
+  // Net amounts charged to the customer after coupon discount
+  const deliveryFeeAfterDiscount = round(Math.max(0, safeDeliveryFee - deliveryDiscountUsed));
+  const platformFeeAfterDiscount = round(Math.max(0, safePlatformFee - platformDiscountSplit));
+
+  // GST on post-discount amounts (requirement: GST = discounted_base × rate)
+  const deliveryGST = round(deliveryFeeAfterDiscount * (safeDeliveryChargeGstPercent / 100));
   const cgstDelivery = round(deliveryGST / 2);
   const sgstDelivery = round(deliveryGST - cgstDelivery);
 
-  // ── Platform discount distribution ─────────────────────────────────────────
-  // Coupons are platform-only and cannot alter restaurant-side billing.
-  const platformGST = round(safePlatformFee * (Math.max(0, platformGstPercent) / 100));
+  const platformGST = round(platformFeeAfterDiscount * (Math.max(0, platformGstPercent) / 100));
   const cgstPlatform = round(platformGST / 2);
   const sgstPlatform = round(platformGST - cgstPlatform);
-  const platformBillBeforeDiscount = round(safeDeliveryFee + deliveryGST + safePlatformFee + platformGST);
-  const safeFoodierDiscount = round(clamp(foodierDiscount, 0, platformBillBeforeDiscount));
-  const platformDiscountUsed = safeFoodierDiscount;
-  const restaurantDiscountUsed = safeRestaurantDiscount;
 
-  // Coupon discount is applied after GST on platform bill and does not alter GST components.
+  // Reference total at full rates — for display/reporting only, not used in billing
+  const platformBillBeforeDiscount = round(
+    safeDeliveryFee + round(safeDeliveryFee * (safeDeliveryChargeGstPercent / 100))
+    + safePlatformFee + round(safePlatformFee * (Math.max(0, platformGstPercent) / 100)),
+  );
+
+  // Customer-facing platform bill: post-discount fee + GST on discounted amounts
+  const platformBillTotal = round(deliveryFeeAfterDiscount + deliveryGST + platformFeeAfterDiscount + platformGST);
+
+  // Platform absorbs the delivery discount so the rider is paid the full original delivery fee
+  const adminDeliverySubsidy = deliveryDiscountUsed;
+
+  // No separate GST-on-discount component (GST is already applied on the post-discount base)
   const gstOnDiscount = 0;
   const finalPayableToRestaurant = restaurantBillTotal;
-  const platformBillTotal = round(platformBillBeforeDiscount - platformDiscountUsed);
 
   // ── Canonical settlement fields ───────────────────────────────────────────
   // Business rule:
@@ -130,6 +156,8 @@ function calculateSettlementBreakdown({
     restaurantBillTotal,
     foodierDiscount: safeFoodierDiscount,
     platformDiscountUsed,
+    deliveryDiscountUsed,
+    platformDiscountSplit,
     restaurantDiscountUsed,
     gstOnDiscount,
     finalPayableToRestaurant,
@@ -145,6 +173,9 @@ function calculateSettlementBreakdown({
     cgstPlatform,
     sgstPlatform,
     platformBillTotal,
+    deliveryFeeAfterDiscount,
+    platformFeeAfterDiscount,
+    adminDeliverySubsidy,
     // ── GST percents (for invoice display) ───────────────────────────────────
     gstPercentOnFood: round(Math.max(0, foodGstPercent)),
     gstPercentOnPackaging: round(Math.max(0, packagingGstPercent)),

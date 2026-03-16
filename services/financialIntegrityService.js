@@ -125,15 +125,23 @@ function validateOrderFinancialIntegrity(orderLike) {
   }
 
   // 4) Platform bill integrity
+  // Since settlement-v3, GST is calculated on post-discount amounts.
+  // platformBillTotal = deliveryFeeAfterDiscount + deliveryGST + platformFeeAfterDiscount + platformGST
+  // Fallback to legacy formula for orders created before settlement-v3.
+  const deliveryDiscUsed = r2(pb.deliveryDiscountUsed || 0);
+  const totalCouponDisc = r2(pb.platformDiscountUsed || 0);
+  const platformDiscSplitCheck = r2(totalCouponDisc - deliveryDiscUsed);
+  const deliveryFeeNet = r2(
+    pb.deliveryFeeAfterDiscount ?? Math.max(0, (pb.deliveryFee || 0) - deliveryDiscUsed),
+  );
+  const platformFeeNet = r2(
+    pb.platformFeeAfterDiscount ?? Math.max(0, (pb.platformFee || 0) - platformDiscSplitCheck),
+  );
   const platformBillExpected = r2(
-    (pb.deliveryFee || 0)
-      + (pb.deliveryGST || 0)
-      + (pb.platformFee || 0)
-      + (pb.platformGST || 0)
-      - (pb.platformDiscountUsed || 0),
+    deliveryFeeNet + (pb.deliveryGST || 0) + platformFeeNet + (pb.platformGST || 0),
   );
   if (!nearlyEqual(pb.platformBillTotal || 0, platformBillExpected)) {
-    issues.push('platformBillTotal mismatch: deliveryFee + deliveryGST + platformFee + platformGST - platformDiscountUsed');
+    issues.push('platformBillTotal mismatch: deliveryFeeAfterDiscount + deliveryGST + platformFeeAfterDiscount + platformGST');
   }
 
   // 5) Discount distribution integrity

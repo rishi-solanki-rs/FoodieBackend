@@ -1,27 +1,11 @@
 const Banner = require("../models/Banner");
 const BannerClick = require("../models/BannerClick");
 
-const NAV_FIELDS = "_id title image type targetId targetModel externalUrl navigationType";
-
-function computeNavigationType(banner) {
-  if (!banner || !banner.type) return "none";
-  switch (banner.type) {
-    case "restaurant":
-      return "restaurant";
-    case "item":
-      return "product";
-    case "category":
-      return "category";
-    case "external":
-      return "external";
-    default:
-      return "none";
-  }
-}
+const NAV_FIELDS = "_id title image targetId";
 
 exports.getActiveBanners = async (req, res) => {
   try {
-    const banners = await Banner.find({ isActive: true })
+    const banners = await Banner.find({ isActive: true, type: "restaurant", targetModel: "Restaurant" })
       .sort({ position: 1 })
       .select(NAV_FIELDS)
       .lean();
@@ -30,11 +14,10 @@ exports.getActiveBanners = async (req, res) => {
       _id: banner._id,
       title: banner.title,
       image: banner.image,
-      type: banner.type,
+      type: "restaurant",
       targetId: banner.targetId || null,
-      targetModel: banner.targetModel || null,
-      externalUrl: banner.externalUrl || null,
-      navigationType: banner.navigationType || computeNavigationType(banner),
+      targetModel: "Restaurant",
+      navigationType: "restaurant",
     }));
 
     return res.status(200).json(normalized);

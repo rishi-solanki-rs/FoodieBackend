@@ -180,6 +180,13 @@ const orderSchema = new mongoose.Schema(
       // Discount distribution (invoice v2)
       platformDiscountUsed: { type: Number, default: 0 },
       restaurantDiscountUsed: { type: Number, default: 0 },
+      // Coupon discount split (settlement-v3)
+      deliveryDiscountUsed: { type: Number, default: 0 },     // coupon portion applied to delivery fee
+      platformDiscountSplit: { type: Number, default: 0 },    // coupon portion applied to platform fee
+      couponDiscountAmount: { type: Number, default: 0 },     // total coupon discount (= platformDiscountUsed)
+      deliveryFeeAfterDiscount: { type: Number, default: 0 }, // delivery fee customer is charged
+      platformFeeAfterDiscount: { type: Number, default: 0 }, // platform fee customer is charged
+      adminDeliverySubsidy: { type: Number, default: 0 },     // platform absorbs this to pay rider full fee
       // Settlement clarity fields (v2)
       restaurantGross: { type: Number, default: 0 },        // priceAfterRestaurantDiscount + packaging (for audit trail)
       restaurantNet: { type: Number, default: 0 },          // alias for restaurantNetEarning
