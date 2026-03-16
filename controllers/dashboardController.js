@@ -4,10 +4,11 @@ const Restaurant = require("../models/Restaurant");
 const Rider = require("../models/Rider");
 exports.getOverview = async (req, res) => {
   try {
-    const [totalUsers, totalRiders, totalRestaurants] = await Promise.all([
+    const [totalUsers, totalRiders, totalRestaurants, totalOrdersAllTime] = await Promise.all([
       User.countDocuments({ isDeleted: { $ne: true } }),
       Rider.countDocuments({}),
       Restaurant.countDocuments({}),
+      Order.countDocuments({}),
     ]);
     const deliveredMatch = { status: "delivered" };
     const earningsAgg = await Order.aggregate([
@@ -45,6 +46,15 @@ exports.getOverview = async (req, res) => {
       { $group: { _id: null, total: { $sum: { $ifNull: ["$totalAmount", 0] } } } },
     ]);
     const todayEarnings = todayAgg[0]?.total || 0;
+
+    const [todayOrders, todayOrderValueAgg] = await Promise.all([
+      Order.countDocuments({ createdAt: { $gte: start, $lte: end } }),
+      Order.aggregate([
+        { $match: { createdAt: { $gte: start, $lte: end }, status: { $ne: "cancelled" } } },
+        { $group: { _id: null, total: { $sum: { $ifNull: ["$totalAmount", 0] } } } },
+      ]),
+    ]);
+    const todayOrderValue = Number(todayOrderValueAgg?.[0]?.total || 0);
     const statusAgg = await Order.aggregate([
       { $match: { createdAt: { $gte: start, $lte: end } } },
       {
@@ -161,6 +171,9 @@ exports.getOverview = async (req, res) => {
       totalUsers,
       totalRiders,
       totalRestaurants,
+      totalOrdersAllTime,
+      todayOrders,
+      todayOrderValue,
       totalEarnings: Number(totalsRow.totalEarnings || 0),
       todayEarnings,
       totalCommission: Number(totalsRow.totalCommission || 0),
