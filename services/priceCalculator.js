@@ -353,14 +353,6 @@ async function calculateOrderPrice({
       discountBase: round(deliveryFee + platformFee),
     });
     const discount = round(couponResult.discount);
-    const safeDeliveryFee = resolveDeliveryFee({
-      distanceKm: deliveryDistance,
-      slabs: adminSettings.deliverySlabs,
-      restaurant,
-      itemTotal,
-      couponResult,
-    });
-
     // 6. Canonical restaurant billing + platform settlement breakdown
     const effectiveFoodGstPercent = priceAfterRestaurantDiscount > 0
       ? round((gstTotal / priceAfterRestaurantDiscount) * 100)
@@ -375,15 +367,19 @@ async function calculateOrderPrice({
       packagingCharge: packaging,
       packagingGstPercent,
       foodierDiscount: discount,
+      couponType: couponResult.couponType || null,
+      freeDelivery: couponResult.freeDelivery || false,
       discountGstPercent,
       // Pass platform and delivery components; settlement applies separated GST.
-      deliveryFee: safeDeliveryFee,
+      deliveryFee: deliveryFee,
       platformFee,
       deliveryChargeGstPercent: adminSettings.deliveryChargeGstPercent,
       platformGstPercent: adminSettings.platformFeeGstPercent,
       adminCommissionAmount: estimatedAdminCommission,
       adminCommissionGstPercent: adminSettings.adminCommissionGstPercent,
     });
+
+    const couponDiscountAmount = round(settlement.platformDiscountUsed || 0);
 
     const gstTotalForOrder = round(settlement.gstOnFood + settlement.packagingGST + settlement.deliveryGST + settlement.platformGST);
 
@@ -412,19 +408,21 @@ async function calculateOrderPrice({
         packaging,
         packagingGST: settlement.packagingGST,
         restaurantBillTotal: settlement.restaurantBillTotal,
-        deliveryFee: safeDeliveryFee,
+        deliveryFee,
         deliveryGST: settlement.deliveryGST,
         cgstDelivery: settlement.cgstDelivery,
         sgstDelivery: settlement.sgstDelivery,
         platformFee,
         smallCartFee,
-        discount,
+        discount: couponDiscountAmount,
         couponCode: couponCode || null,
-        couponDiscountAmount: round(discount),
-        foodierDiscount: settlement.foodierDiscount,
+        couponType: couponResult.couponType || null,
+        couponDiscountAmount,
+        foodierDiscount: couponDiscountAmount,
+        platformDiscountUsed: round(settlement.platformDiscountUsed || 0),
         deliveryDiscountUsed: round(settlement.deliveryDiscountUsed || 0),
         platformDiscountSplit: round(settlement.platformDiscountSplit || 0),
-        deliveryFeeAfterDiscount: settlement.deliveryFeeAfterDiscount ?? safeDeliveryFee,
+        deliveryFeeAfterDiscount: settlement.deliveryFeeAfterDiscount ?? deliveryFee,
         platformFeeAfterDiscount: settlement.platformFeeAfterDiscount ?? platformFee,
         adminDeliverySubsidy: round(settlement.adminDeliverySubsidy || 0),
         gstOnDiscount: settlement.gstOnDiscount,
@@ -443,7 +441,8 @@ async function calculateOrderPrice({
       },
       coupon: {
         code: couponCode || null,
-        applied: discount > 0 || couponResult.freeDelivery,
+        type: couponResult.couponType || null,
+        applied: couponDiscountAmount > 0 || couponResult.freeDelivery,
         error: couponResult.error,
         freeDelivery: couponResult.freeDelivery || false,
       },
@@ -457,56 +456,71 @@ async function calculateOrderPrice({
 
 async function validateAndApplyCoupon({ couponCode, itemTotal, restaurantId, userId, discountBase = 0 }) {
   const normalizedCode = typeof couponCode === 'string' ? couponCode.trim().toUpperCase() : '';
-  if (!normalizedCode) return { discount: 0, freeDelivery: false, error: null };
+  if (!normalizedCode) return { discount: 0, freeDelivery: false, couponType: null, error: null };
 
   const promo = await Promocode.findOne({ code: normalizedCode, status: 'active' });
-  if (!promo) return { discount: 0, freeDelivery: false, error: 'Invalid coupon code' };
+  if (!promo) return { discount: 0, freeDelivery: false, couponType: null, error: 'Invalid coupon code' };
+
+  const normalizedOfferType = String(promo.offerType || '').toLowerCase() === 'percent'
+    ? 'percentage'
+    : String(promo.offerType || '').toLowerCase();
+  if (!['percentage', 'free_delivery'].includes(normalizedOfferType)) {
+    return { discount: 0, freeDelivery: false, couponType: null, error: 'Unsupported coupon type' };
+  }
 
   const now = new Date();
-  if (now < promo.availableFrom || now > promo.expiryDate) {
-    return { discount: 0, freeDelivery: false, error: 'Coupon expired or not yet active' };
+  if (!promo.availableFrom || !promo.expiryDate || now < promo.availableFrom || now > promo.expiryDate) {
+    return { discount: 0, freeDelivery: false, couponType: null, error: 'Coupon expired or not yet active' };
   }
   if (promo.restaurant && promo.restaurant.toString() !== restaurantId.toString()) {
-    return { discount: 0, freeDelivery: false, error: 'Coupon not valid for this restaurant' };
+    return { discount: 0, freeDelivery: false, couponType: normalizedOfferType, error: 'Coupon not valid for this restaurant' };
   }
   if (itemTotal < (promo.minOrderValue || 0)) {
     const needed = promo.minOrderValue - itemTotal;
-    return { discount: 0, freeDelivery: false, error: `Add items worth ₹${needed.toFixed(2)} more to use this coupon` };
+    return { discount: 0, freeDelivery: false, couponType: normalizedOfferType, error: `Add items worth ₹${needed.toFixed(2)} more to use this coupon` };
   }
-  if (promo.isTimeBound) {
+  const activeDays = Array.isArray(promo.activeDays) ? promo.activeDays : [];
+  const timeSlots = Array.isArray(promo.timeSlots) ? promo.timeSlots : [];
+
+  if (promo.isTimeBound || activeDays.length > 0 || timeSlots.length > 0) {
     const currentDay = now.toLocaleString('en-US', { weekday: 'long' });
     const currentTime = `${now.getHours()}:${String(now.getMinutes()).padStart(2, '0')}`;
-    if (promo.activeDays?.length > 0 && !promo.activeDays.includes(currentDay)) {
-      return { discount: 0, freeDelivery: false, error: `Coupon valid only on ${promo.activeDays.join(', ')}` };
+    if (activeDays.length > 0 && !activeDays.includes(currentDay)) {
+      return { discount: 0, freeDelivery: false, couponType: normalizedOfferType, error: `Coupon valid only on ${activeDays.join(', ')}` };
     }
-    if (promo.timeSlots?.length > 0) {
-      const isValidTime = promo.timeSlots.some(s => currentTime >= s.startTime && currentTime <= s.endTime);
-      if (!isValidTime) return { discount: 0, freeDelivery: false, error: 'Coupon not valid at this time' };
-    }
-  }
-  if (userId && promo.usageLimitPerUser > 0) {
-    const usageCount = await Order.countDocuments({ customer: userId, couponCode: promo.code, status: { $ne: 'cancelled' } });
-    if (usageCount >= promo.usageLimitPerUser) {
-      return { discount: 0, freeDelivery: false, error: 'You have reached the usage limit for this coupon' };
+    if (timeSlots.length > 0) {
+      const isValidTime = timeSlots.some(s => currentTime >= s.startTime && currentTime <= s.endTime);
+      if (!isValidTime) return { discount: 0, freeDelivery: false, couponType: normalizedOfferType, error: 'Coupon not valid at this time' };
     }
   }
-  if (promo.usageLimitPerCoupon > 0 && promo.usedCount >= promo.usageLimitPerCoupon) {
-    return { discount: 0, freeDelivery: false, error: 'Coupon usage limit reached' };
+  const perUserLimit = Number(promo.usageLimitPerUser ?? 0);
+  if (userId && perUserLimit > 0) {
+    const userRecord = Array.isArray(promo.userUsageRecords)
+      ? promo.userUsageRecords.find((entry) => String(entry.user) === String(userId))
+      : null;
+    const usageCount = userRecord
+      ? Number(userRecord.usedCount || 0)
+      : await Order.countDocuments({ customer: userId, couponCode: promo.code, status: { $ne: 'cancelled' } });
+    if (perUserLimit > 0 && usageCount >= perUserLimit) {
+      return { discount: 0, freeDelivery: false, couponType: normalizedOfferType, error: 'You have reached the usage limit for this coupon' };
+    }
+  }
+  const globalUsageLimit = Number(promo.usageLimitPerCoupon ?? 0);
+  if (globalUsageLimit > 0 && Number(promo.usedCount || 0) >= globalUsageLimit) {
+    return { discount: 0, freeDelivery: false, couponType: normalizedOfferType, error: 'Coupon usage limit reached' };
   }
 
   const eligibleDiscountBase = round(Math.max(0, discountBase));
   let discount = 0;
   let freeDelivery = false;
-  if (promo.offerType === 'percent') {
+  if (normalizedOfferType === 'percentage') {
     discount = (eligibleDiscountBase * promo.discountValue) / 100;
     if (promo.maxDiscountAmount > 0) discount = Math.min(discount, promo.maxDiscountAmount);
-  } else if (promo.offerType === 'flat' || promo.offerType === 'amount') {
-    discount = promo.discountValue;
-  } else if (promo.offerType === 'free_delivery') {
+  } else if (normalizedOfferType === 'free_delivery') {
     freeDelivery = true;
   }
   discount = Math.min(discount, eligibleDiscountBase);
-  return { discount, freeDelivery, error: null };
+  return { discount, freeDelivery, couponType: normalizedOfferType, error: null };
 }
 
 // ─── Exports ─────────────────────────────────────────────────────────────────

@@ -138,6 +138,7 @@ const orderSchema = new mongoose.Schema(
     tip: { type: Number, default: 0 },
     discount: { type: Number, default: 0 },
     couponCode: { type: String },
+    couponType: { type: String, default: null },
     totalAmount: { type: Number, required: true },
     paymentBreakdown: {
       itemTotal: { type: Number, default: 0 },
@@ -148,6 +149,7 @@ const orderSchema = new mongoose.Schema(
       packagingGST: { type: Number, default: 0 },
       restaurantBillTotal: { type: Number, default: 0 },
       foodierDiscount: { type: Number, default: 0 },
+      couponType: { type: String, default: null },
       gstOnDiscount: { type: Number, default: 0 },
       // finalPayableToRestaurant = customer-facing: what customer pays toward restaurant bill
       //   (settlement formula: restaurantBillTotal; platform coupons do not affect this)

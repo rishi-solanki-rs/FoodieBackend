@@ -17,22 +17,25 @@ const promocodeSchema = new mongoose.Schema({
     },
     offerType: { 
         type: String, 
-        enum: ['percent', 'amount', 'free_delivery'], 
+        enum: ['percentage', 'free_delivery'], 
         required: true 
     },
     discountValue: { type: Number, required: true }, // e.g. 20 (%) or 100 ($)
     maxDiscountAmount: { type: Number }, // Cap for percentage offers (e.g. Max $50 off)
     minOrderValue: { type: Number, default: 0 },
-    adminContribution: { type: Number, default: 0 }, 
     usageLimitPerCoupon: { type: Number, default: 0 }, // 0 = Unlimited
     usedCount: { type: Number, default: 0 }, // Incremented on successful paid orders
     usageLimitPerUser: { type: Number, default: 1 },   // How many times 1 user can use it
+    userUsageRecords: [{
+        user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+        usedCount: { type: Number, default: 0 },
+        lastUsedAt: { type: Date }
+    }],
     availableFrom: { type: Date, required: true },
     expiryDate: { type: Date, required: true },
-    promoType: { type: String, default: 'general' }, // e.g. "General", "Hidden", "Welcome"
     isTimeBound: { type: Boolean, default: false },
     activeDays: {
-        type: [String], // ["Monday", "Wednesday", "Friday"]
+        type: [String], 
         default: []
     },
     timeSlots: [{
@@ -45,4 +48,5 @@ const promocodeSchema = new mongoose.Schema({
         default: 'active' 
     }
 }, { timestamps: true });
+
 module.exports = mongoose.model('Promocode', promocodeSchema);

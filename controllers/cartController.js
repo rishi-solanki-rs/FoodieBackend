@@ -147,6 +147,9 @@ exports.validateCoupon = async (req, res) => {
     if (!cart) {
       return res.status(404).json({ message: "Cart not found." });
     }
+    if (cart.couponCode && String(cart.couponCode).toUpperCase() !== couponCode) {
+      return res.status(400).json({ message: "Only one coupon can be applied per order." });
+    }
     cart.couponCode = couponCode;
     const bill = await buildCartBill(cart, userId, req.body.addressId || req.query.addressId || null);
     if (bill.couponError) {

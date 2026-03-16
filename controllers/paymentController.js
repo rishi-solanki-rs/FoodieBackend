@@ -8,6 +8,27 @@ const socketService = require("../services/socketService");
 const { logger, logOrderTransition, logPayment, logCouponUsage } = require("../utils/logger");
 const { sendNotification } = require("../utils/notificationService");
 
+const incrementPromocodeUsage = async ({ couponCode, userId }) => {
+    const normalizedCouponCode = String(couponCode || '').trim().toUpperCase();
+    if (!normalizedCouponCode || !userId) return;
+
+    const promo = await Promocode.findOne({ code: normalizedCouponCode });
+    if (!promo) return;
+
+    promo.usedCount = Number(promo.usedCount || 0) + 1;
+    const usageRecords = Array.isArray(promo.userUsageRecords) ? promo.userUsageRecords : [];
+    const existingRecord = usageRecords.find((entry) => String(entry.user) === String(userId));
+    if (existingRecord) {
+        existingRecord.usedCount = Number(existingRecord.usedCount || 0) + 1;
+        existingRecord.lastUsedAt = new Date();
+    } else {
+        usageRecords.push({ user: userId, usedCount: 1, lastUsedAt: new Date() });
+        promo.userUsageRecords = usageRecords;
+    }
+
+    await promo.save();
+};
+
 /**
  * POST /api/payment/create-order
  * Creates a Razorpay order for an existing app Order.
@@ -150,7 +171,7 @@ exports.verifyRazorpayPayment = async (req, res) => {
         try {
             if (order.couponCode) {
                 const normalizedCouponCode = String(order.couponCode).trim().toUpperCase();
-                await Promocode.updateOne({ code: normalizedCouponCode }, { $inc: { usedCount: 1 } });
+                await incrementPromocodeUsage({ couponCode: normalizedCouponCode, userId: order.customer._id });
                 logCouponUsage(order.customer._id, normalizedCouponCode, order._id, null, true);
             }
         } catch (e) {
@@ -326,7 +347,7 @@ async function handleWebhookPaymentSuccess(paymentEntity) {
     try {
         if (order.couponCode) {
             const normalizedCouponCode = String(order.couponCode).trim().toUpperCase();
-            await Promocode.updateOne({ code: normalizedCouponCode }, { $inc: { usedCount: 1 } });
+            await incrementPromocodeUsage({ couponCode: normalizedCouponCode, userId: order.customer._id });
         }
     } catch (e) { }
 

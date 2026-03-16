@@ -25,6 +25,8 @@ function calculateSettlementBreakdown({
   packagingCharge = 0,
   packagingGstPercent = 0,
   foodierDiscount = 0,
+  couponType = null,
+  freeDelivery = false,
   discountGstPercent = 0,
   // Platform bill inputs
   deliveryFee = 0,
@@ -64,14 +66,25 @@ function calculateSettlementBreakdown({
   // correct tax benefit. Restaurant billing is never affected by coupons.
   const platformChargesBase = round(safeDeliveryFee + safePlatformFee);
   const safeFoodierDiscount = round(clamp(foodierDiscount, 0, platformChargesBase));
-  const platformDiscountUsed = safeFoodierDiscount; // total coupon discount (backwards-compat alias)
   const restaurantDiscountUsed = safeRestaurantDiscount;
 
-  // Proportional split of coupon discount between delivery fee and platform fee
-  const deliveryDiscountUsed = platformChargesBase > 0
-    ? round(clamp((safeDeliveryFee / platformChargesBase) * safeFoodierDiscount, 0, safeDeliveryFee))
-    : 0;
-  const platformDiscountSplit = round(safeFoodierDiscount - deliveryDiscountUsed);
+  // Discount application order:
+  // 1) Platform fee first
+  // 2) Remaining discount on delivery fee
+  // Free delivery coupon always zeroes delivery charge for customer.
+  const normalizedCouponType = String(couponType || '').toLowerCase();
+  let platformDiscountSplit = 0;
+  let deliveryDiscountUsed = 0;
+
+  if (freeDelivery || normalizedCouponType === 'free_delivery') {
+    deliveryDiscountUsed = safeDeliveryFee;
+  } else {
+    platformDiscountSplit = round(Math.min(safeFoodierDiscount, safePlatformFee));
+    const remainingDiscount = round(Math.max(0, safeFoodierDiscount - platformDiscountSplit));
+    deliveryDiscountUsed = round(Math.min(remainingDiscount, safeDeliveryFee));
+  }
+
+  const platformDiscountUsed = round(platformDiscountSplit + deliveryDiscountUsed);
 
   // Net amounts charged to the customer after coupon discount
   const deliveryFeeAfterDiscount = round(Math.max(0, safeDeliveryFee - deliveryDiscountUsed));
@@ -154,7 +167,8 @@ function calculateSettlementBreakdown({
     cgstOnPackaging,
     sgstOnPackaging,
     restaurantBillTotal,
-    foodierDiscount: safeFoodierDiscount,
+    foodierDiscount: platformDiscountUsed,
+    couponType: normalizedCouponType || null,
     platformDiscountUsed,
     deliveryDiscountUsed,
     platformDiscountSplit,

@@ -98,6 +98,27 @@ const toMoney = (value) => {
   return Number(numeric.toFixed(5));
 };
 
+const incrementPromocodeUsage = async ({ couponCode, userId }) => {
+  const normalizedCouponCode = String(couponCode || '').trim().toUpperCase();
+  if (!normalizedCouponCode || !userId) return;
+
+  const promo = await Promocode.findOne({ code: normalizedCouponCode });
+  if (!promo) return;
+
+  promo.usedCount = Number(promo.usedCount || 0) + 1;
+  const usageRecords = Array.isArray(promo.userUsageRecords) ? promo.userUsageRecords : [];
+  const record = usageRecords.find((entry) => String(entry.user) === String(userId));
+  if (record) {
+    record.usedCount = Number(record.usedCount || 0) + 1;
+    record.lastUsedAt = new Date();
+  } else {
+    usageRecords.push({ user: userId, usedCount: 1, lastUsedAt: new Date() });
+    promo.userUsageRecords = usageRecords;
+  }
+
+  await promo.save();
+};
+
 const extractDeliverySnapshot = (orderLike) => {
   const order = orderLike || {};
   const pb = order.paymentBreakdown || {};
@@ -176,8 +197,10 @@ const calculateBill = async (
       surgeFee: breakdown.surgeFee,
       surgeMultiplier: breakdown.surgeMultiplier,
       discount: breakdown.discount,
+      couponType: breakdown.couponType || null,
       foodierDiscount: breakdown.foodierDiscount || breakdown.discount || 0,
       gstOnDiscount: breakdown.gstOnDiscount || 0,
+      platformDiscountUsed: breakdown.platformDiscountUsed || breakdown.couponDiscountAmount || breakdown.discount || 0,
       deliveryDiscountUsed: breakdown.deliveryDiscountUsed || 0,
       couponDiscountAmount: breakdown.couponDiscountAmount || breakdown.discount || 0,
       deliveryFeeAfterDiscount: breakdown.deliveryFeeAfterDiscount ?? breakdown.deliveryFee,
@@ -502,6 +525,7 @@ exports.placeOrder = async (req, res) => {
       tip: tipAmount,
       discount: bill.discount,
       couponCode: bill.appliedCoupon,
+      couponType: bill.couponType || null,
       totalAmount: bill.toPay,
       paymentBreakdown: {
         ...canonicalSettlement,
@@ -538,7 +562,9 @@ exports.placeOrder = async (req, res) => {
         adminPlatformFeeShare,
         // Coupon discount split (settlement-v3) — stored explicitly since canonicalSettlement
         // is re-computed from bill fields and may not carry couponDiscountAmount through
+        couponType: bill.couponType || canonicalSettlement.couponType || null,
         couponDiscountAmount: toMoney(bill.couponDiscountAmount || bill.foodierDiscount || 0),
+        platformDiscountUsed: toMoney(canonicalSettlement.platformDiscountUsed || bill.couponDiscountAmount || bill.discount || 0),
         deliveryDiscountUsed: toMoney(canonicalSettlement.deliveryDiscountUsed || 0),
         platformDiscountSplit: toMoney(canonicalSettlement.platformDiscountSplit || 0),
         deliveryFeeAfterDiscount: toMoney(canonicalSettlement.deliveryFeeAfterDiscount ?? bill.deliveryFee ?? 0),
@@ -594,6 +620,11 @@ exports.placeOrder = async (req, res) => {
         order: newOrder,
         bill: {
           ...extractDeliverySnapshot(orderSnapshot),
+          couponCode: orderSnapshot.couponCode || null,
+          couponType: orderSnapshot.couponType || orderSnapshot.paymentBreakdown?.couponType || null,
+          couponDiscountAmount: orderSnapshot.paymentBreakdown?.couponDiscountAmount || orderSnapshot.discount || 0,
+          deliveryFeeAfterDiscount: orderSnapshot.paymentBreakdown?.deliveryFeeAfterDiscount ?? orderSnapshot.deliveryFee ?? 0,
+          platformFeeAfterDiscount: orderSnapshot.paymentBreakdown?.platformFeeAfterDiscount ?? orderSnapshot.platformFee ?? 0,
           itemTotal: orderSnapshot.itemTotal,
           tax: orderSnapshot.tax,
           packaging: orderSnapshot.packaging || 0,
@@ -648,7 +679,7 @@ exports.placeOrder = async (req, res) => {
     await Cart.findByIdAndDelete(cart._id);
     if (paymentStatus === "paid" && cart.couponCode) {
       const normalizedCouponCode = String(cart.couponCode).trim().toUpperCase();
-      await Promocode.updateOne({ code: normalizedCouponCode }, { $inc: { usedCount: 1 } });
+      await incrementPromocodeUsage({ couponCode: normalizedCouponCode, userId: user._id });
       logCouponUsage(user._id, normalizedCouponCode, newOrder._id, null, true);
     }
     const orderSnapshot = newOrder.toObject();
@@ -658,6 +689,11 @@ exports.placeOrder = async (req, res) => {
       order: newOrder,
       bill: {
         ...extractDeliverySnapshot(orderSnapshot),
+        couponCode: orderSnapshot.couponCode || null,
+        couponType: orderSnapshot.couponType || orderSnapshot.paymentBreakdown?.couponType || null,
+        couponDiscountAmount: orderSnapshot.paymentBreakdown?.couponDiscountAmount || orderSnapshot.discount || 0,
+        deliveryFeeAfterDiscount: orderSnapshot.paymentBreakdown?.deliveryFeeAfterDiscount ?? orderSnapshot.deliveryFee ?? 0,
+        platformFeeAfterDiscount: orderSnapshot.paymentBreakdown?.platformFeeAfterDiscount ?? orderSnapshot.platformFee ?? 0,
         itemTotal: orderSnapshot.itemTotal,
         tax: orderSnapshot.tax,
         packaging: orderSnapshot.packaging || 0,
@@ -1284,8 +1320,10 @@ exports.customerCancelOrder = async (req, res) => {
         rider.isAvailable = true;
         await rider.save({ session });
         try {
-          socketService.emitToRider(rider.user.toString(), 'order:cancelled', {
-            orderId: order._id.toString(),
+            const riderUserId = (rider.user && rider.user._id)
+            ? rider.user._id.toString()
+            : String(rider.user);
+            socketService.emitToRider(riderUserId, 'order:cancelled', {            orderId: order._id.toString(),
             message: "Order cancelled by customer",
             status: 'cancelled',
             reason: reason || 'Customer cancellation',
@@ -1678,7 +1716,10 @@ exports.updateOrderStatus = async (req, res) => {
           // Also emit to rider:<userId> room for robustness
           const riderDocForEmit = await Rider.findById(order.rider).select('user').lean();
           if (riderDocForEmit?.user) {
-            socketService.emitToRider(riderDocForEmit.user.toString(), 'rider:earnings_updated', settlementPayload);
+            const riderUserId = (riderDocForEmit.user._id)
+              ? riderDocForEmit.user._id.toString()
+              : String(riderDocForEmit.user);
+            socketService.emitToRider(riderUserId, 'rider:earnings_updated', settlementPayload);
           }
           socketService.emitToRestaurant(order.restaurant.toString(), 'restaurant:earnings_updated', settlementPayload);
           socketService.emitToAdmin('earnings:updated', settlementPayload);
@@ -2584,8 +2625,11 @@ exports.adminUpdateStatus = async (req, res) => {
           socketService.emitToRider(order.rider.toString(), 'rider:earnings_updated', settlementPayload);
           // Also emit to rider:<userId> room for robustness
           const riderDocForEmitAdmin = await Rider.findById(order.rider).select('user').lean();
-          if (riderDocForEmitAdmin?.user) {
-            socketService.emitToRider(riderDocForEmitAdmin.user.toString(), 'rider:earnings_updated', settlementPayload);
+        if (riderDocForEmitAdmin?.user) {
+            const riderUserId = (riderDocForEmitAdmin.user._id)
+              ? riderDocForEmitAdmin.user._id.toString()
+              : String(riderDocForEmitAdmin.user);
+            socketService.emitToRider(riderUserId, 'rider:earnings_updated', settlementPayload);
           }
           socketService.emitToRestaurant(order.restaurant.toString(), 'restaurant:earnings_updated', settlementPayload);
           socketService.emitToAdmin('earnings:updated', settlementPayload);
@@ -2674,8 +2718,11 @@ exports.adminCancelOrder = async (req, res) => {
         message: "Order has been cancelled by admin"
       });
       const riderDoc = await Rider.findById(order.rider).select('user');
-      if (riderDoc?.user) {
-        socketService.emitToRider(riderDoc.user.toString(), "order:cancelled", {
+     if (riderDoc?.user) {
+        const riderUserId = (riderDoc.user._id)
+          ? riderDoc.user._id.toString()
+          : String(riderDoc.user);
+        socketService.emitToRider(riderUserId, "order:cancelled", {
           ...cancelData,
           message: "Order has been cancelled by admin"
         });
