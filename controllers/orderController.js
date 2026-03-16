@@ -114,6 +114,7 @@ const calculateBill = async (
   cart,
   userId = null,
   deliveryDistanceKm = 0,
+  paymentMethod = null,
 ) => {
   try {
     const safeItems = Array.isArray(cart?.items)
@@ -147,6 +148,7 @@ const calculateBill = async (
       restaurantId,
       userId,
       couponCode: cart.couponCode || null,
+      paymentMethod,
       deliveryDistance: deliveryDistanceKm,
       tip
     });
@@ -261,7 +263,7 @@ exports.placeOrder = async (req, res) => {
         calculateDistance(restaurant.location.coordinates, deliveryAddress.location.coordinates) * 100
       ) / 100;
     }
-    let bill = await calculateBill(cart, req.user._id, deliveryDistanceKm);
+    let bill = await calculateBill(cart, req.user._id, deliveryDistanceKm, paymentMethod);
     if ((Number(deliveryDistanceKm) || 0) > 0 && (Number(bill.deliveryFee) || 0) <= 0) {
       const currentAdminSettings = await getAdminSettings();
       const freeDeliveryActive = Boolean(
@@ -281,7 +283,7 @@ exports.placeOrder = async (req, res) => {
           slabs: currentAdminSettings.deliverySlabs,
         });
 
-        bill = await calculateBill(cart, req.user._id, deliveryDistanceKm);
+        bill = await calculateBill(cart, req.user._id, deliveryDistanceKm, paymentMethod);
       }
     }
     const totalPayment = bill.toPay;
@@ -645,8 +647,9 @@ exports.placeOrder = async (req, res) => {
     } catch (err) { }
     await Cart.findByIdAndDelete(cart._id);
     if (paymentStatus === "paid" && cart.couponCode) {
-      await Promocode.updateOne({ code: cart.couponCode }, { $inc: { usedCount: 1 } });
-      logCouponUsage(user._id, cart.couponCode, newOrder._id, null, true);
+      const normalizedCouponCode = String(cart.couponCode).trim().toUpperCase();
+      await Promocode.updateOne({ code: normalizedCouponCode }, { $inc: { usedCount: 1 } });
+      logCouponUsage(user._id, normalizedCouponCode, newOrder._id, null, true);
     }
     const orderSnapshot = newOrder.toObject();
     res.status(201).json({

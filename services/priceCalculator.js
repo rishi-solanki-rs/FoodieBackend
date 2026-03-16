@@ -456,9 +456,10 @@ async function calculateOrderPrice({
 // ─── Coupon validation (unchanged) ───────────────────────────────────────────
 
 async function validateAndApplyCoupon({ couponCode, itemTotal, restaurantId, userId, discountBase = 0 }) {
-  if (!couponCode) return { discount: 0, freeDelivery: false, error: null };
+  const normalizedCode = typeof couponCode === 'string' ? couponCode.trim().toUpperCase() : '';
+  if (!normalizedCode) return { discount: 0, freeDelivery: false, error: null };
 
-  const promo = await Promocode.findOne({ code: couponCode, status: 'active' });
+  const promo = await Promocode.findOne({ code: normalizedCode, status: 'active' });
   if (!promo) return { discount: 0, freeDelivery: false, error: 'Invalid coupon code' };
 
   const now = new Date();

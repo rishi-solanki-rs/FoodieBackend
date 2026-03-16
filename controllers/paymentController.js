@@ -149,8 +149,9 @@ exports.verifyRazorpayPayment = async (req, res) => {
         // Coupon usage
         try {
             if (order.couponCode) {
-                await Promocode.updateOne({ code: order.couponCode }, { $inc: { usedCount: 1 } });
-                logCouponUsage(order.customer._id, order.couponCode, order._id, null, true);
+                const normalizedCouponCode = String(order.couponCode).trim().toUpperCase();
+                await Promocode.updateOne({ code: normalizedCouponCode }, { $inc: { usedCount: 1 } });
+                logCouponUsage(order.customer._id, normalizedCouponCode, order._id, null, true);
             }
         } catch (e) {
             logger.warn("Could not apply coupon usage after payment", { error: e.message, orderId });
@@ -324,7 +325,8 @@ async function handleWebhookPaymentSuccess(paymentEntity) {
 
     try {
         if (order.couponCode) {
-            await Promocode.updateOne({ code: order.couponCode }, { $inc: { usedCount: 1 } });
+            const normalizedCouponCode = String(order.couponCode).trim().toUpperCase();
+            await Promocode.updateOne({ code: normalizedCouponCode }, { $inc: { usedCount: 1 } });
         }
     } catch (e) { }
 

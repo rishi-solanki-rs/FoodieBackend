@@ -11,6 +11,7 @@ Backend route mounts:
 
 Coupon-related endpoints:
 - POST /api/cart/validate-coupon
+- DELETE /api/cart/coupon
 - GET /api/cart
 - POST /api/admin/promocode
 - GET /api/admin/promocode
@@ -44,7 +45,6 @@ Optional:
 - restaurant (null means global)
 - image (multipart file)
 - promoType
-- paymentMethods
 - isTimeBound, activeDays, timeSlots
 
 ### 2.2 Example create request (admin)
@@ -94,8 +94,9 @@ POST /api/cart/validate-coupon
 ```
 
 Behavior:
-- Backend writes couponCode into cart.
+- Backend normalizes couponCode (trim + uppercase) and writes it into cart.
 - Backend recalculates bill through the same pricing engine used for order placement.
+- On valid coupon, couponCode is persisted in cart.
 - If invalid, returns 400 with reason.
 
 Success:
@@ -126,7 +127,30 @@ Failure:
 ```json
 {
   "valid": false,
-  "message": "Add items worth Rs 50.00 more to use this coupon"
+  "message": "Add items worth ₹50.00 more to use this coupon"
+}
+```
+
+### 3.2 Remove coupon endpoint
+
+DELETE /api/cart/coupon
+
+```json
+{
+  "addressId": "<optional-address-id>"
+}
+```
+
+Success:
+
+```json
+{
+  "success": true,
+  "message": "Coupon removed",
+  "bill": {
+    "discount": 0,
+    "couponError": null
+  }
 }
 ```
 
@@ -148,6 +172,7 @@ Use GET /api/cart response:
 
 Use same GET /api/cart bill payload just before place-order.
 Do not recompute discount in frontend.
+Payment method does not affect coupon validity (wallet and online both supported).
 
 ### 4.3 Order placed response
 
@@ -168,6 +193,10 @@ If frontend needs detailed coupon split after order creation, use order details 
 Coupon discount base is platform-controlled charges only:
 - deliveryFee
 - platformFee
+
+Payment method dependency:
+- None. Coupon eligibility does not depend on payment method.
+- Coupon is valid for both wallet and online flows.
 
 Coupon does not reduce:
 - food item totals
@@ -218,9 +247,9 @@ Delivery fee depends on distance, so always pass selected addressId when validat
 
 ## 8. Known Backend Notes
 
-- There is no dedicated remove-coupon endpoint currently.
-- To remove coupon in UI flow, clear coupon input and refresh cart state (or replace with another coupon).
-- paymentMethods field exists in coupon model, but current validator does not enforce payment-method restriction.
+- Dedicated remove endpoint is available: DELETE /api/cart/coupon.
+- Coupon codes are normalized to uppercase in apply/validate flow.
+- Coupon usage count (`usedCount`) is tracked on successful paid order flows.
 
 ## 9. Suggested Frontend Integration Sequence
 
@@ -228,6 +257,7 @@ Delivery fee depends on distance, so always pass selected addressId when validat
 2. Call POST /api/cart/validate-coupon with couponCode and selected addressId.
 3. If valid=true, update UI from returned bill.
 4. Keep rendering totals from GET /api/cart bill (single source of truth).
-5. At checkout, re-fetch GET /api/cart to avoid stale pricing.
-6. Place order.
-7. For final invoice-like details, read order details paymentBreakdown.
+5. If user removes coupon, call DELETE /api/cart/coupon and refresh totals from returned bill.
+6. At checkout, re-fetch GET /api/cart to avoid stale pricing.
+7. Place order using wallet or online (coupon behavior is identical).
+8. For final invoice-like details, read order details paymentBreakdown.

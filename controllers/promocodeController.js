@@ -9,7 +9,7 @@ exports.addPromocode = async (req, res) => {
             offerType, discountValue, maxDiscountAmount, minOrderValue, adminContribution,
             usageLimitPerCoupon, usageLimitPerUser,
             availableFrom, expiryDate,
-            promoType, paymentMethods,
+            promoType,
             isTimeBound, activeDays, timeSlots,
             status
         } = req.body;
@@ -26,7 +26,7 @@ exports.addPromocode = async (req, res) => {
             offerType, discountValue, maxDiscountAmount, minOrderValue, adminContribution,
             usageLimitPerCoupon, usageLimitPerUser,
             availableFrom, expiryDate,
-            promoType, paymentMethods,
+            promoType,
             isTimeBound, activeDays, timeSlots,
             status
         });

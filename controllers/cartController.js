@@ -135,7 +135,8 @@ exports.getCart = async (req, res) => {
 };
 exports.validateCoupon = async (req, res) => {
   try {
-    const { couponCode } = req.body;
+    const rawCouponCode = req.body?.couponCode;
+    const couponCode = typeof rawCouponCode === 'string' ? rawCouponCode.trim().toUpperCase() : '';
     const userId = req.user ? req.user._id : req.body.userId;
     if (!couponCode) {
       return res.status(400).json({ message: "Coupon code is required." });
@@ -151,7 +152,26 @@ exports.validateCoupon = async (req, res) => {
     if (bill.couponError) {
       return res.status(400).json({ valid: false, message: bill.couponError });
     }
+    await cart.save();
     return res.json({ valid: true, message: "Coupon is valid", bill });
+  } catch (err) {
+    return res.status(500).json({ message: "Server error." });
+  }
+};
+
+exports.removeCoupon = async (req, res) => {
+  try {
+    const userId = req.user ? req.user._id : req.body.userId;
+    const cart = await Cart.findOne({ user: userId });
+    if (!cart) {
+      return res.status(404).json({ message: "Cart not found." });
+    }
+
+    cart.couponCode = null;
+    await cart.save();
+
+    const bill = await buildCartBill(cart, userId, req.body.addressId || req.query.addressId || null);
+    return res.json({ success: true, message: "Coupon removed", bill });
   } catch (err) {
     return res.status(500).json({ message: "Server error." });
   }
