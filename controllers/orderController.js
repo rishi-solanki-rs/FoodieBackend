@@ -2141,6 +2141,7 @@ exports.searchRidersForOrder = async (req, res) => {
     const nearbyRiderCountResult = await Rider.aggregate([
       {
         $geoNear: {
+          key: "currentLocation",
           near: {
             type: "Point",
             coordinates: [restaurantCoords[0], restaurantCoords[1]],
