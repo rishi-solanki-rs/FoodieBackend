@@ -10,11 +10,6 @@ const promocodeSchema = new mongoose.Schema({
         trim: true 
     },
     image: { type: String }, // URL from upload
-    restaurant: { 
-        type: mongoose.Schema.Types.ObjectId, 
-        ref: 'Restaurant', 
-        default: null // Null means "All Restaurants" (Global)
-    },
     offerType: { 
         type: String, 
         enum: ['percentage', 'free_delivery'], 

@@ -31,7 +31,6 @@ exports.addPromocode = async (req, res) => {
     try {
         const {
             title, description, code,
-            restaurant, 
             offerType, discountValue, maxDiscountAmount, minOrderValue,
             usageLimitPerCoupon, usageLimitPerUser,
             availableFrom, expiryDate,
@@ -58,7 +57,6 @@ exports.addPromocode = async (req, res) => {
             title, description, 
             code: code.toUpperCase(), 
             image,
-            restaurant: restaurant || null,
             offerType: normalizedOfferType, discountValue, maxDiscountAmount, minOrderValue,
             usageLimitPerCoupon: resolvedUsageLimitPerCoupon,
             usageLimitPerUser: resolvedUsageLimitPerUser,
@@ -81,7 +79,6 @@ exports.getAllPromocodes = async (req, res) => {
         const query = buildSearchQuery(search, ['code', 'title', 'description']);
         const total = await Promocode.countDocuments(query);
         const promos = await Promocode.find(query)
-            .populate('restaurant', 'name')
             .skip(skip)
             .limit(limit)
             .sort({ createdAt: -1 });
@@ -98,8 +95,7 @@ exports.getAllPromocodes = async (req, res) => {
 };
 exports.getPromocodeById = async (req, res) => {
     try {
-        const promo = await Promocode.findById(req.params.id)
-            .populate('restaurant', 'name');
+        const promo = await Promocode.findById(req.params.id);
         if (!promo) {
             return res.status(404).json({ message: "Promocode not found" });
         }
@@ -152,11 +148,7 @@ exports.deletePromocode = async (req, res) => {
 };
 exports.createOwnerPromocode = async (req, res) => {
     try {
-        const Restaurant = require('../models/Restaurant');
-        const restaurant = await Restaurant.findOne({ owner: req.user._id });
-        if (!restaurant) return res.status(404).json({ message: 'Restaurant not found' });
         const body = req.body;
-        body.restaurant = restaurant._id;
         body.code = body.code ? body.code.toUpperCase() : undefined;
         const normalizedOfferType = normalizeOfferType(body.offerType);
         if (!normalizedOfferType) {
@@ -189,10 +181,7 @@ exports.createOwnerPromocode = async (req, res) => {
 };
 exports.getOwnerPromocodes = async (req, res) => {
     try {
-        const Restaurant = require('../models/Restaurant');
-        const restaurant = await Restaurant.findOne({ owner: req.user._id });
-        if (!restaurant) return res.status(404).json({ message: 'Restaurant not found' });
-        const promos = await Promocode.find({ restaurant: restaurant._id }).sort({ createdAt: -1 });
+        const promos = await Promocode.find({}).sort({ createdAt: -1 });
         res.status(200).json(promos);
     } catch (error) {
         res.status(500).json({ message: error.message });
@@ -200,11 +189,8 @@ exports.getOwnerPromocodes = async (req, res) => {
 };
 exports.getOwnerPromocodeById = async (req, res) => {
     try {
-        const Restaurant = require('../models/Restaurant');
-        const restaurant = await Restaurant.findOne({ owner: req.user._id });
-        if (!restaurant) return res.status(404).json({ message: 'Restaurant not found' });
-        const promo = await Promocode.findOne({ _id: req.params.id, restaurant: restaurant._id });
-        if (!promo) return res.status(404).json({ message: 'Promocode not found or not yours' });
+        const promo = await Promocode.findById(req.params.id);
+        if (!promo) return res.status(404).json({ message: 'Promocode not found' });
         res.status(200).json(promo);
     } catch (error) {
         res.status(500).json({ message: error.message });
@@ -212,10 +198,7 @@ exports.getOwnerPromocodeById = async (req, res) => {
 };
 exports.updateOwnerPromocode = async (req, res) => {
     try {
-        const Restaurant = require('../models/Restaurant');
-        const restaurant = await Restaurant.findOne({ owner: req.user._id });
-        if (!restaurant) return res.status(404).json({ message: 'Restaurant not found' });
-        const promo = await Promocode.findOne({ _id: req.params.id, restaurant: restaurant._id });
+        const promo = await Promocode.findById(req.params.id);
         if (!promo) return res.status(404).json({ message: 'Promocode not found' });
         const updateData = { ...req.body };
         if (updateData.offerType !== undefined) {
@@ -247,11 +230,8 @@ exports.updateOwnerPromocode = async (req, res) => {
 };
 exports.deleteOwnerPromocode = async (req, res) => {
     try {
-        const Restaurant = require('../models/Restaurant');
-        const restaurant = await Restaurant.findOne({ owner: req.user._id });
-        if (!restaurant) return res.status(404).json({ message: 'Restaurant not found' });
-        const promo = await Promocode.findOneAndDelete({ _id: req.params.id, restaurant: restaurant._id });
-        if (!promo) return res.status(404).json({ message: 'Promocode not found or not yours' });
+        const promo = await Promocode.findByIdAndDelete(req.params.id);
+        if (!promo) return res.status(404).json({ message: 'Promocode not found' });
         res.status(200).json({ message: 'Promocode deleted' });
     } catch (error) {
         res.status(500).json({ message: error.message });

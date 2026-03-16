@@ -472,9 +472,6 @@ async function validateAndApplyCoupon({ couponCode, itemTotal, restaurantId, use
   if (!promo.availableFrom || !promo.expiryDate || now < promo.availableFrom || now > promo.expiryDate) {
     return { discount: 0, freeDelivery: false, couponType: null, error: 'Coupon expired or not yet active' };
   }
-  if (promo.restaurant && promo.restaurant.toString() !== restaurantId.toString()) {
-    return { discount: 0, freeDelivery: false, couponType: normalizedOfferType, error: 'Coupon not valid for this restaurant' };
-  }
   if (itemTotal < (promo.minOrderValue || 0)) {
     const needed = promo.minOrderValue - itemTotal;
     return { discount: 0, freeDelivery: false, couponType: normalizedOfferType, error: `Add items worth ₹${needed.toFixed(2)} more to use this coupon` };
