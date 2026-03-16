@@ -168,7 +168,7 @@ const riderSchema = new mongoose.Schema({
     },
     currentLocation: {
         type: { type: String, default: 'Point' },
-        coordinates: { type: [Number], default: [0, 0], index: '2dsphere' } 
+        coordinates: { type: [Number], default: [0, 0] } 
     },
     lastLocationUpdateAt: { type: Date },
     rating: { 
