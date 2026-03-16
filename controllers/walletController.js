@@ -1,5 +1,9 @@
 const crypto = require('crypto');
 const User = require('../models/User');
+const Rider = require('../models/Rider');
+const RiderWallet = require('../models/RiderWallet');
+const Restaurant = require('../models/Restaurant');
+const RestaurantWallet = require('../models/RestaurantWallet');
 const WalletTransaction = require('../models/WalletTransaction');
 const WalletRechargeOrder = require('../models/WalletRechargeOrder');
 const { getRazorpay } = require('../services/razorpayService');
@@ -191,14 +195,91 @@ exports.verifyWalletRechargePayment = async (req, res) => {
 };
 exports.getAllWallets = async (req, res) => {
     try {
-        const { page = 1, limit = 10 } = req.query;
+        const page = Number(req.query.page) || 1;
+        const limit = Number(req.query.limit) || 10;
+        const role = req.query.role;
         const skip = (page - 1) * limit;
-        const wallets = await User.find()
-            .select('_id firstName lastName email walletBalance role')
-            .limit(limit * 1)
-            .skip(skip)
-            .sort({ walletBalance: -1 });
-        const total = await User.countDocuments();
+
+        const userFilter = role && role !== 'all' ? { role } : {};
+
+        const [users, total] = await Promise.all([
+            User.find(userFilter)
+                .select('_id name firstName lastName email walletBalance role')
+                .limit(limit)
+                .skip(skip)
+                .sort({ walletBalance: -1 }),
+            User.countDocuments(userFilter),
+        ]);
+
+        const riderUserIds = users
+            .filter((userDoc) => userDoc.role === 'rider')
+            .map((userDoc) => userDoc._id);
+
+        const restaurantOwnerUserIds = users
+            .filter((userDoc) => userDoc.role === 'restaurant_owner')
+            .map((userDoc) => userDoc._id);
+
+        const riderWalletByUserId = new Map();
+        if (riderUserIds.length) {
+            const riders = await Rider.find({ user: { $in: riderUserIds } }).select('_id user');
+            const riderById = new Map(riders.map((rider) => [rider._id.toString(), rider]));
+            const riderIds = riders.map((rider) => rider._id);
+
+            if (riderIds.length) {
+                const riderWallets = await RiderWallet.find({ rider: { $in: riderIds } })
+                    .select('rider availableBalance');
+
+                riderWallets.forEach((walletDoc) => {
+                    const rider = riderById.get(walletDoc.rider.toString());
+                    if (rider?.user) {
+                        riderWalletByUserId.set(rider.user.toString(), walletDoc.availableBalance || 0);
+                    }
+                });
+            }
+        }
+
+        const restaurantWalletByOwnerId = new Map();
+        if (restaurantOwnerUserIds.length) {
+            const restaurants = await Restaurant.find({ owner: { $in: restaurantOwnerUserIds } })
+                .select('_id owner');
+            const restaurantOwnerById = new Map(restaurants.map((restaurant) => [restaurant._id.toString(), restaurant.owner]));
+            const restaurantIds = restaurants.map((restaurant) => restaurant._id);
+
+            if (restaurantIds.length) {
+                const restaurantWallets = await RestaurantWallet.find({ restaurant: { $in: restaurantIds } })
+                    .select('restaurant balance');
+
+                restaurantWallets.forEach((walletDoc) => {
+                    const ownerId = restaurantOwnerById.get(walletDoc.restaurant.toString());
+                    if (!ownerId) return;
+                    const ownerKey = ownerId.toString();
+                    const current = restaurantWalletByOwnerId.get(ownerKey) || 0;
+                    restaurantWalletByOwnerId.set(ownerKey, current + (walletDoc.balance || 0));
+                });
+            }
+        }
+
+        const wallets = users.map((userDoc) => {
+            const userObj = userDoc.toObject();
+            const nameParts = String(userObj.name || '').trim().split(' ').filter(Boolean);
+            const firstName = userObj.firstName || nameParts[0] || '';
+            const lastName = userObj.lastName || nameParts.slice(1).join(' ');
+
+            let resolvedBalance = userObj.walletBalance || 0;
+            if (userObj.role === 'rider') {
+                resolvedBalance = riderWalletByUserId.get(String(userObj._id)) ?? 0;
+            } else if (userObj.role === 'restaurant_owner') {
+                resolvedBalance = restaurantWalletByOwnerId.get(String(userObj._id)) ?? 0;
+            }
+
+            return {
+                ...userObj,
+                firstName,
+                lastName,
+                walletBalance: resolvedBalance,
+            };
+        });
+
         res.status(200).json({
             total,
             pages: Math.ceil(total / limit),
