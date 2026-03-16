@@ -29,6 +29,7 @@ const adminCmsRoutes = require('./routes/adminCmsRoutes');
 const trainingRoutes = require('./routes/trainingRoutes');
 const reportRoutes = require('./routes/reportRoutes');
 const foodCategoryRoutes = require('./routes/foodCategoryRoutes');
+const bannerRoutes = require('./routes/bannerRoutes');
 
 const app = express();
 const server = http.createServer(app);
@@ -77,6 +78,8 @@ app.use('/api/food-categories', foodCategoryRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api/search', searchRoutes);
 app.use('/api/home', homeRoutes);
+app.use('/api/banners', bannerRoutes);
+app.use('/api/banner', bannerRoutes);
 app.use('/api/cities', cityRoutes);
 app.use('/api/zones', zoneRoutes);
 app.use('/api/food-quantities', foodQuantityRoutes);

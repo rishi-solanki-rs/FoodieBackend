@@ -7,10 +7,122 @@ const Brand = require('../models/Brand');
 const Cuisine = require('../models/Cuisine');
 const DocumentType = require('../models/DocumentType');
 const Banner = require('../models/Banner');
+const Restaurant = require('../models/Restaurant');
+const Product = require('../models/Product');
 const { getFileUrl } = require('../utils/upload');
 const { getPaginationParams, buildSearchQuery } = require('../utils/pagination');
 
 // MasterCategory functions removed - Use FoodCategory endpoints at /api/food-categories instead
+
+function resolveNavigationType(type) {
+    switch (type) {
+        case 'restaurant':
+            return 'restaurant';
+        case 'item':
+            return 'product';
+        case 'category':
+            return 'category';
+        case 'external':
+            return 'external';
+        default:
+            return 'none';
+    }
+}
+
+function isRestaurantAvailableForBanner(restaurant) {
+    if (!restaurant) return false;
+    const approved = Boolean(restaurant.restaurantApproved ?? restaurant.isApproved);
+    const active = Boolean(restaurant.isActive);
+    const notTemporarilyClosed = !Boolean(restaurant.isTemporarilyClosed);
+    const accountActive = !restaurant.accountStatus || restaurant.accountStatus === 'active';
+    return approved && active && notTemporarilyClosed && accountActive;
+}
+
+async function validateBannerTarget(payload) {
+    const type = payload.type || 'static';
+
+    if (type === 'restaurant') {
+        if (payload.targetModel !== 'Restaurant') {
+            throw new Error('targetModel must be Restaurant for restaurant banner');
+        }
+        if (!payload.targetId) {
+            throw new Error('targetId is required for restaurant banner');
+        }
+        const restaurant = await Restaurant.findById(payload.targetId)
+            .select('restaurantApproved isApproved isActive isTemporarilyClosed accountStatus')
+            .lean();
+        if (!isRestaurantAvailableForBanner(restaurant)) {
+            throw new Error('Restaurant not available for banner');
+        }
+    }
+
+    if (type === 'item') {
+        if (payload.targetModel !== 'Product') {
+            throw new Error('targetModel must be Product for item banner');
+        }
+        if (!payload.targetId) {
+            throw new Error('targetId is required for item banner');
+        }
+
+        const product = await Product.findById(payload.targetId)
+            .select('available restaurant')
+            .populate({
+                path: 'restaurant',
+                select: 'restaurantApproved isApproved isActive isTemporarilyClosed accountStatus',
+            })
+            .lean();
+
+        if (!product || !product.available) {
+            throw new Error('Product not available for banner');
+        }
+        if (!isRestaurantAvailableForBanner(product.restaurant)) {
+            throw new Error('Product restaurant not available for banner');
+        }
+    }
+
+    if (type === 'category') {
+        if (payload.targetModel !== 'Category') {
+            throw new Error('targetModel must be Category for category banner');
+        }
+        if (!payload.targetId) {
+            throw new Error('targetId is required for category banner');
+        }
+        const category = await Category.findById(payload.targetId).select('_id').lean();
+        if (!category) {
+            throw new Error('Category not found for banner');
+        }
+    }
+
+    if (type === 'external') {
+        if (!payload.externalUrl) {
+            throw new Error('externalUrl is required for external banner');
+        }
+    }
+}
+
+function buildBannerPayload(input, image) {
+    const type = input.type || 'static';
+    const payload = {
+        title: input.title,
+        image,
+        type,
+        targetId: input.targetId || undefined,
+        targetModel: input.targetModel || undefined,
+        externalUrl: input.externalUrl || null,
+        navigationType: resolveNavigationType(type),
+        position: Number(input.position || 0),
+        isActive: input.isActive !== undefined ? input.isActive : true,
+    };
+
+    if (type === 'external' || type === 'static') {
+        payload.targetId = undefined;
+        payload.targetModel = undefined;
+    }
+    if (type !== 'external') {
+        payload.externalUrl = null;
+    }
+    return payload;
+}
 
 exports.addUnit = async (req, res) => {
     try {
@@ -429,14 +541,15 @@ exports.deleteCancellationReason = async (req, res) => {
 };
 exports.addBanner = async (req, res) => {
     try {
-        const { title, type, targetId, targetModel, position } = req.body;
         const image = req.file ? getFileUrl(req.file) : req.body.image;
-        const banner = await Banner.create({
-            title, image, type, targetId, targetModel, position
-        });
+
+        const bannerPayload = buildBannerPayload(req.body, image);
+        await validateBannerTarget(bannerPayload);
+
+        const banner = await Banner.create(bannerPayload);
         res.status(201).json({ message: "Banner created", data: banner });
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        res.status(400).json({ message: error.message });
     }
 };
 exports.getAllBanners = async (req, res) => {
@@ -473,18 +586,30 @@ exports.getBannerById = async (req, res) => {
 };
 exports.updateBanner = async (req, res) => {
     try {
-        const updateData = { ...req.body };
-        if (req.file) {
-            updateData.image = getFileUrl(req.file);
+        const existingBanner = await Banner.findById(req.params.id);
+        if (!existingBanner) {
+            return res.status(404).json({ message: "Banner not found" });
         }
+
+        const image = req.file ? getFileUrl(req.file) : (req.body.image || existingBanner.image);
+        const updateData = buildBannerPayload(
+            {
+                ...existingBanner.toObject(),
+                ...req.body,
+            },
+            image,
+        );
+
+        await validateBannerTarget(updateData);
+
         const updatedBanner = await Banner.findByIdAndUpdate(
             req.params.id,
             updateData,
-            { new: true }
+            { new: true, runValidators: true }
         );
         res.status(200).json({ message: "Banner updated", data: updatedBanner });
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        res.status(400).json({ message: error.message });
     }
 };
 exports.deleteBanner = async (req, res) => {

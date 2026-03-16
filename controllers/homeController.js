@@ -652,10 +652,25 @@ exports.getExploreRestaurants = async (req, res) => {
 };
 exports.getBanners = async (req, res) => {
   try {
-    const banners = await Banner.find({ isActive: true }).sort({ position: 1 });
+    const banners = await Banner.find({ isActive: true })
+      .sort({ position: 1 })
+      .select("_id title image type targetId targetModel externalUrl navigationType")
+      .lean();
+
+    const normalized = banners.map((banner) => ({
+      _id: banner._id,
+      title: banner.title,
+      image: banner.image,
+      type: banner.type,
+      targetId: banner.targetId || null,
+      targetModel: banner.targetModel || null,
+      externalUrl: banner.externalUrl || null,
+      navigationType: banner.navigationType || "none",
+    }));
+
     res.status(200).json({
-      banners,
-      count: banners.length
+      banners: normalized,
+      count: normalized.length
     });
   } catch (error) {
     console.error("Get Banners Error:", error);
