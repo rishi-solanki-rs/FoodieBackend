@@ -97,6 +97,19 @@ const toMoney = (value) => {
   if (!Number.isFinite(numeric)) return 0;
   return Number(numeric.toFixed(5));
 };
+
+const extractDeliverySnapshot = (orderLike) => {
+  const order = orderLike || {};
+  const pb = order.paymentBreakdown || {};
+  return {
+    deliveryDistanceKm: toMoney(order.deliveryDistanceKm || 0),
+    deliveryFee: toMoney(pb.deliveryCharge ?? order.deliveryFee ?? 0),
+    deliveryGST: toMoney(pb.deliveryGST || 0),
+    cgstDelivery: toMoney(pb.cgstDelivery ?? ((pb.deliveryGST || 0) / 2)),
+    sgstDelivery: toMoney(pb.sgstDelivery ?? ((pb.deliveryGST || 0) - ((pb.cgstDelivery ?? ((pb.deliveryGST || 0) / 2))))),
+  };
+};
+
 const calculateBill = async (
   cart,
   userId = null,
@@ -143,6 +156,7 @@ const calculateBill = async (
     const breakdown = pricingResult.breakdown;
     const coupon = pricingResult.coupon;
     return {
+      deliveryDistanceKm: toMoney(deliveryDistanceKm || breakdown.deliveryDistanceKm || 0),
       itemTotal: breakdown.itemTotal,
       restaurantDiscount: breakdown.restaurantDiscount || 0,
       priceAfterRestaurantDiscount: breakdown.priceAfterRestaurantDiscount || Math.max(0, (breakdown.itemTotal || 0) - (breakdown.restaurantDiscount || 0)),
@@ -152,6 +166,9 @@ const calculateBill = async (
       packagingGST: breakdown.packagingGST || 0,
       restaurantBillTotal: breakdown.restaurantBillTotal || 0,
       deliveryFee: breakdown.deliveryFee,
+      deliveryGST: breakdown.deliveryGST || breakdown.paymentBreakdown?.deliveryGST || 0,
+      cgstDelivery: breakdown.cgstDelivery || breakdown.paymentBreakdown?.cgstDelivery || 0,
+      sgstDelivery: breakdown.sgstDelivery || breakdown.paymentBreakdown?.sgstDelivery || 0,
       platformFee: breakdown.platformFee,
       smallCartFee: breakdown.smallCartFee,
       surgeFee: breakdown.surgeFee,
@@ -555,10 +572,21 @@ exports.placeOrder = async (req, res) => {
     await Restaurant.findByIdAndUpdate(restaurantId, { $inc: { totalOrders: 1 } });
     logOrderTransition(newOrder._id, null, initialStatus, user._id, "customer", `Order placed via ${paymentMethod}`);
     if (isOnlineOrder) {
+      const orderSnapshot = newOrder.toObject();
       return res.status(201).json({
         success: true,
         message: "Order created. Complete payment to confirm.",
         order: newOrder,
+        bill: {
+          ...extractDeliverySnapshot(orderSnapshot),
+          itemTotal: orderSnapshot.itemTotal,
+          tax: orderSnapshot.tax,
+          packaging: orderSnapshot.packaging || 0,
+          platformFee: orderSnapshot.platformFee || 0,
+          tip: orderSnapshot.tip || 0,
+          discount: orderSnapshot.discount || 0,
+          totalAmount: orderSnapshot.totalAmount || 0,
+        },
         orderId: newOrder._id,
         totalPayment,
         requiresPayment: true,
@@ -607,10 +635,21 @@ exports.placeOrder = async (req, res) => {
       await Promocode.updateOne({ code: cart.couponCode }, { $inc: { usedCount: 1 } });
       logCouponUsage(user._id, cart.couponCode, newOrder._id, null, true);
     }
+    const orderSnapshot = newOrder.toObject();
     res.status(201).json({
       success: true,
       message: "Order placed successfully",
       order: newOrder,
+      bill: {
+        ...extractDeliverySnapshot(orderSnapshot),
+        itemTotal: orderSnapshot.itemTotal,
+        tax: orderSnapshot.tax,
+        packaging: orderSnapshot.packaging || 0,
+        platformFee: orderSnapshot.platformFee || 0,
+        tip: orderSnapshot.tip || 0,
+        discount: orderSnapshot.discount || 0,
+        totalAmount: orderSnapshot.totalAmount || 0,
+      },
       totalPayment
     });
   } catch (error) {
@@ -638,6 +677,7 @@ exports.getMyOrders = async (req, res) => {
       .sort({ createdAt: -1 });
     const formattedOrders = orders.map(order => {
       const orderObj = order.toObject();
+      const deliverySnapshot = extractDeliverySnapshot(orderObj);
       if (orderObj.restaurant) {
         orderObj.restaurant = formatRestaurantForUser(orderObj.restaurant);
       }
@@ -655,7 +695,10 @@ exports.getMyOrders = async (req, res) => {
           orderObj.estimatedMinutes = Math.ceil(distanceToCustomer / 1); // 1 km/min assumption
         }
       }
-      return orderObj;
+      return {
+        ...orderObj,
+        ...deliverySnapshot,
+      };
     });
     res.status(200).json({ success: true, orders: formattedOrders });
   } catch (error) {
@@ -679,6 +722,7 @@ exports.getOrderDetailsCustomer = async (req, res) => {
     }
     const { calculateDistance } = require('../utils/locationUtils');
     const orderObj = order.toObject();
+    const deliverySnapshot = extractDeliverySnapshot(orderObj);
     const response = {
       success: true,
       order: {
@@ -715,7 +759,7 @@ exports.getOrderDetailsCustomer = async (req, res) => {
           itemTotal: orderObj.itemTotal,
           tax: orderObj.tax,
           packaging: orderObj.packaging || 0,
-          deliveryFee: orderObj.deliveryFee,
+          ...deliverySnapshot,
           platformFee: orderObj.platformFee,
           tip: orderObj.tip,
           discount: orderObj.discount,
@@ -785,6 +829,7 @@ exports.getOrderDetailsRestaurant = async (req, res) => {
       return sendError(res, 403, "Access denied");
     }
     const orderObj = order.toObject();
+    const deliverySnapshot = extractDeliverySnapshot(orderObj);
     const response = {
       success: true,
       order: {
@@ -816,7 +861,7 @@ exports.getOrderDetailsRestaurant = async (req, res) => {
           itemTotal: orderObj.itemTotal,
           tax: orderObj.tax,
           packaging: orderObj.packaging || 0,
-          deliveryFee: orderObj.deliveryFee,
+          ...deliverySnapshot,
           platformFee: orderObj.platformFee,
           tip: orderObj.tip,
           discount: orderObj.discount,
@@ -878,6 +923,7 @@ exports.getOrderDetailsRider = async (req, res) => {
     }
     const { calculateDistance } = require('../utils/locationUtils');
     const orderObj = order.toObject();
+    const deliverySnapshot = extractDeliverySnapshot(orderObj);
     const response = {
       success: true,
       order: {
@@ -910,7 +956,7 @@ exports.getOrderDetailsRider = async (req, res) => {
         })),
         bill: {
           itemTotal: orderObj.itemTotal,
-          deliveryFee: orderObj.deliveryFee,
+          ...deliverySnapshot,
           tip: orderObj.tip,
           totalAmount: orderObj.totalAmount,
           riderEarning: (orderObj.riderEarnings?.totalRiderEarning || 0),

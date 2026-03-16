@@ -41,7 +41,7 @@ const bannerSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-bannerSchema.pre("validate", function syncNavigationShape(next) {
+bannerSchema.pre("validate", function syncNavigationShape() {
   this.navigationType = resolveNavigationType(this.type);
 
   if (this.type === "external") {
@@ -58,8 +58,6 @@ bannerSchema.pre("validate", function syncNavigationShape(next) {
   if (this.type !== "external") {
     this.externalUrl = null;
   }
-
-  next();
 });
 
 module.exports = mongoose.model("Banner", bannerSchema);

@@ -3,8 +3,53 @@ const Product = require("../models/Product");
 const Restaurant = require("../models/Restaurant");
 const Promocode = require("../models/Promocode");
 const Order = require("../models/Order");
+const User = require("../models/User");
 const { calculateBill } = require("./orderController"); // Import unified calculateBill
 const { formatRestaurantForUser, formatProductForUser } = require("../utils/responseFormatter");
+const { calculateDistance } = require("../utils/locationUtils");
+
+const roundDistance = (value) => {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric < 0) return 0;
+  return Math.round(numeric * 100) / 100;
+};
+
+async function resolveCartDeliveryDistance({ cart, userId, addressId = null }) {
+  if (!cart?.restaurant || !userId) {
+    return 0;
+  }
+
+  const restaurantId = cart.restaurant?._id || cart.restaurant;
+  const [restaurant, user] = await Promise.all([
+    Restaurant.findById(restaurantId).select('location.coordinates').lean(),
+    User.findById(userId).select('savedAddresses').lean(),
+  ]);
+
+  const restaurantCoords = restaurant?.location?.coordinates;
+  if (!Array.isArray(restaurantCoords) || restaurantCoords.length !== 2) {
+    return 0;
+  }
+
+  const addresses = Array.isArray(user?.savedAddresses) ? user.savedAddresses : [];
+  const selectedAddress = (
+    (addressId && addresses.find((entry) => String(entry._id) === String(addressId)))
+    || addresses.find((entry) => entry?.isDefault)
+    || addresses[0]
+  );
+
+  const customerCoords = selectedAddress?.location?.coordinates;
+  if (!Array.isArray(customerCoords) || customerCoords.length !== 2) {
+    return 0;
+  }
+
+  return roundDistance(calculateDistance(restaurantCoords, customerCoords));
+}
+
+async function buildCartBill(cart, userId, addressId = null) {
+  const deliveryDistanceKm = await resolveCartDeliveryDistance({ cart, userId, addressId });
+  return calculateBill(cart, userId, deliveryDistanceKm);
+}
+
 exports.getCart = async (req, res) => {
   try {
     let cart = await Cart.findOne({ user: req.user._id })
@@ -62,7 +107,7 @@ exports.getCart = async (req, res) => {
       variation: item.variation || null,
       addOns: item.addOns || [],
     }));
-    const bill = await calculateBill(cart, req.user._id);
+    const bill = await buildCartBill(cart, req.user._id, req.query.addressId || null);
     if (bill && bill.restaurantId && bill.restaurantId._id) {
       bill.restaurantId = bill.restaurantId._id;
     }
@@ -102,7 +147,7 @@ exports.validateCoupon = async (req, res) => {
       return res.status(404).json({ message: "Cart not found." });
     }
     cart.couponCode = couponCode;
-    const bill = await calculateBill(cart, userId);
+    const bill = await buildCartBill(cart, userId, req.body.addressId || req.query.addressId || null);
     if (bill.couponError) {
       return res.status(400).json({ valid: false, message: bill.couponError });
     }
@@ -239,7 +284,7 @@ exports.addToCart = async (req, res) => {
       .populate("restaurant")
       .populate("items.restaurant")
       .lean();
-    const bill = await calculateBill(cart, req.user._id);
+    const bill = await buildCartBill(cart, req.user._id, req.body.addressId || req.query.addressId || null);
     res.status(200).json({ 
       message: "Item added to cart successfully", 
       cart: updatedCart, 
@@ -270,7 +315,7 @@ exports.removeItem = async (req, res) => {
       });
     }
     await cart.save();
-    const bill = await calculateBill(cart, req.user._id);
+    const bill = await buildCartBill(cart, req.user._id, req.body.addressId || req.query.addressId || null);
     res.status(200).json({ 
       message: "Item removed from cart", 
       cart, 
@@ -322,7 +367,7 @@ exports.updateItemQuantity = async (req, res) => {
       .populate("restaurant")
       .populate("items.restaurant")
       .lean();
-    const bill = await calculateBill(cart, req.user._id);
+    const bill = await buildCartBill(cart, req.user._id, req.body.addressId || req.query.addressId || null);
     res.status(200).json({
       message: `Item quantity updated to ${item.quantity}`,
       cart: updatedCart,
@@ -347,7 +392,7 @@ exports.updateCartMeta = async (req, res) => {
       cart.tip = Math.round(tipValue * 100) / 100;
     }
     await cart.save();
-    const bill = await calculateBill(cart, req.user._id);
+    const bill = await buildCartBill(cart, req.user._id, req.body.addressId || req.query.addressId || null);
     res.status(200).json({ message: "Cart updated", bill });
   } catch (error) {
     res.status(500).json({ message: error.message });

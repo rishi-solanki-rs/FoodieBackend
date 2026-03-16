@@ -142,6 +142,10 @@ exports.formatProductForUser = (product) => {
 };
 exports.formatOrderForCustomer = (order) => {
   if (!order) return null;
+  const paymentBreakdown = order.paymentBreakdown || {};
+  const deliveryGST = paymentBreakdown.deliveryGST || 0;
+  const cgstDelivery = paymentBreakdown.cgstDelivery || (deliveryGST / 2);
+  const sgstDelivery = paymentBreakdown.sgstDelivery || (deliveryGST - cgstDelivery);
   return {
     _id: order._id,
     status: order.status,
@@ -151,6 +155,10 @@ exports.formatOrderForCustomer = (order) => {
     itemTotal: order.itemTotal,
     tax: order.tax,
     deliveryFee: order.deliveryFee,
+    deliveryDistanceKm: order.deliveryDistanceKm || 0,
+    deliveryGST,
+    cgstDelivery,
+    sgstDelivery,
     discount: order.discount,
     tip: order.tip,
     paymentMethod: order.paymentMethod,

@@ -402,6 +402,7 @@ async function calculateOrderPrice({
     return {
       success: true,
       breakdown: {
+        deliveryDistanceKm: round(deliveryDistance),
         itemTotal: settlement.itemTotal,
         restaurantDiscount: settlement.restaurantDiscount,
         priceAfterRestaurantDiscount: settlement.priceAfterRestaurantDiscount,
@@ -412,6 +413,9 @@ async function calculateOrderPrice({
         packagingGST: settlement.packagingGST,
         restaurantBillTotal: settlement.restaurantBillTotal,
         deliveryFee: safeDeliveryFee,
+        deliveryGST: settlement.deliveryGST,
+        cgstDelivery: settlement.cgstDelivery,
+        sgstDelivery: settlement.sgstDelivery,
         platformFee,
         smallCartFee,
         discount,
