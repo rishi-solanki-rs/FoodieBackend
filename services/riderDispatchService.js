@@ -14,6 +14,17 @@ exports.findAndNotifyRider = async (orderId) => {
         if (order.rider || ['cancelled', 'delivered', 'picked_up'].includes(order.status)) return;
         if (!['accepted', 'preparing', 'ready'].includes(order.status)) return;
 
+        // Avoid duplicate dispatch attempts for the same order while a batch is active.
+        // This prevents false `no_rider_found` when one trigger has already created pending requests.
+        const pendingRequestCount = await RideRequest.countDocuments({
+            order: orderId,
+            status: 'pending',
+        });
+        if (pendingRequestCount > 0) {
+            console.log(`[Dispatch] Skipping duplicate dispatch for Order ${orderId} (${pendingRequestCount} pending requests already active)`);
+            return;
+        }
+
         const restaurant = await Restaurant.findById(order.restaurant);
         if (!restaurant) return console.error('Restaurant not found for dispatch');
 
@@ -30,6 +41,22 @@ exports.findAndNotifyRider = async (orderId) => {
         }).populate('user', 'name mobile');
 
         if (allRiders.length === 0) {
+            // Final recheck to avoid stale/false no_rider_found during concurrent accept/dispatch races.
+            const [freshOrder, hasPendingRequest] = await Promise.all([
+                Order.findById(orderId).select('rider status').lean(),
+                RideRequest.exists({ order: orderId, status: 'pending' }),
+            ]);
+
+            const isStillSearchable =
+                freshOrder &&
+                !freshOrder.rider &&
+                ['accepted', 'preparing', 'ready'].includes(freshOrder.status);
+
+            if (!isStillSearchable || hasPendingRequest) {
+                console.log(`[Dispatch] Suppressed stale no_rider_found for Order ${orderId}`);
+                return;
+            }
+
             console.log(`[Dispatch] No available riders found for Order ${orderId}`);
             socketService.emitToRestaurant(order.restaurant.toString(), 'order:no_rider_found', {
                 orderId,

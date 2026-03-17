@@ -2136,6 +2136,26 @@ exports.searchRidersForOrder = async (req, res) => {
       return res.status(400).json({ message: "Restaurant location missing" });
     }
     const RideRequest = require('../models/RideRequest');
+
+    // If a dispatch batch is already active, do not re-run no-rider checks.
+    // This avoids false negatives when accept flow and manual search overlap.
+    const activePendingRequests = await RideRequest.countDocuments({
+      order: order._id,
+      status: 'pending',
+    });
+    if (activePendingRequests > 0) {
+      logger.info('[SearchRiders] Search already in progress, skipping duplicate trigger', {
+        orderId: order._id,
+        pendingRequests: activePendingRequests,
+      });
+      return res.status(200).json({
+        success: true,
+        message: 'Rider search already in progress',
+        count: activePendingRequests,
+        orderId: order._id,
+      });
+    }
+
     await RideRequest.deleteMany({
       order: order._id,
       status: { $in: ['timeout', 'rejected'] }
