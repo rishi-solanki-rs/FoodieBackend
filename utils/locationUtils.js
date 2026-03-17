@@ -34,6 +34,17 @@ exports.calculateDistance = (coord1, coord2) => {
     return 0;
   }
 };
+exports.calculateDistanceMeters = (coord1, coord2) => {
+  try {
+    return haversine(
+      { latitude: coord1[1], longitude: coord1[0] },
+      { latitude: coord2[1], longitude: coord2[0] }
+    );
+  } catch (error) {
+    console.error('Distance meters calculation error:', error);
+    return 0;
+  }
+};
 exports.estimateTravelMinutes = (distanceKm, speedKmph = 20) => {
   if (!Number.isFinite(distanceKm) || distanceKm <= 0) return 0;
   const minutes = (distanceKm / speedKmph) * 60;

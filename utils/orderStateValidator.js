@@ -152,7 +152,7 @@ const validateRiderDelivery = (order, riderId) => {
     return { valid: false, error: 'Order not assigned to you' };
   }
   if (order.status !== "delivery_arrived") {
-    return { valid: false, error: `You must arrive at customer location first.` };
+    return { valid: false, error: 'Reach the customer location within 100m before verifying delivery OTP.' };
   }
   return { valid: true, error: null };
 };

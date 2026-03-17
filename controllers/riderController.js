@@ -12,11 +12,57 @@ const Order = require('../models/Order');
 const Restaurant = require('../models/Restaurant');
 const { getPaginationParams } = require('../utils/pagination');
 const { getFileUrl } = require('../utils/upload');
-const { calculateDistance } = require('../utils/locationUtils');
+const { calculateDistance, calculateDistanceMeters } = require('../utils/locationUtils');
 const { updateRiderDocumentStatus } = require('../utils/documentExpiryChecker');
 const { initiateProfileUpdate, verifyOTPAndApplyUpdate, checkDuplicate } = require('../utils/profileUpdateHelpers');
 const { sendOTP } = require('../services/smsService');
 const logger = console;
+const ARRIVAL_GEOFENCE_METERS = 100000; // 100 km, can be adjusted as needed
+
+const getCoordinatesOrNull = (locationLike) => {
+  const coordinates = locationLike?.coordinates;
+  return Array.isArray(coordinates) && coordinates.length === 2 ? coordinates : null;
+};
+
+const getArrivalGeofenceResult = (riderCoords, targetCoords, targetLabel) => {
+  if (!riderCoords) {
+    return {
+      valid: false,
+      status: 400,
+      message: 'Rider location not available. Please enable location and try again.',
+    };
+  }
+
+  if (!targetCoords) {
+    return {
+      valid: false,
+      status: 400,
+      message: `${targetLabel} location is missing.`,
+    };
+  }
+
+  const distanceMeters = Math.round(calculateDistanceMeters(riderCoords, targetCoords));
+  if (distanceMeters > ARRIVAL_GEOFENCE_METERS) {
+    return {
+      valid: false,
+      status: 400,
+      message: `You must be within ${ARRIVAL_GEOFENCE_METERS}m of the ${targetLabel.toLowerCase()} to continue.`,
+      details: {
+        distanceMeters,
+        allowedRadiusMeters: ARRIVAL_GEOFENCE_METERS,
+      },
+    };
+  }
+
+  return {
+    valid: true,
+    distanceMeters,
+    details: {
+      distanceMeters,
+      allowedRadiusMeters: ARRIVAL_GEOFENCE_METERS,
+    },
+  };
+};
 const sendError = (res, status, message, details) => {
   return res.status(status).json({
     success: false,
@@ -2622,8 +2668,34 @@ exports.verifyDelivery = async (req, res) => {
     if (!order) return res.status(404).json({ message: "Order not found" });
     const riderProfile = await Rider.findOne({ user: req.user._id });
     if (!riderProfile) return res.status(404).json({ message: "Rider profile not found" });
+    const riderCoords = getCoordinatesOrNull(riderProfile.currentLocation);
+    const customerCoords = getCoordinatesOrNull(order.deliveryAddress);
+
+    if (order.status === 'picked_up') {
+      const geofenceCheck = getArrivalGeofenceResult(riderCoords, customerCoords, 'Customer');
+      if (!geofenceCheck.valid) {
+        return sendError(res, geofenceCheck.status, geofenceCheck.message, geofenceCheck.details);
+      }
+
+      order.status = 'delivery_arrived';
+      order.timeline.push({
+        status: 'delivery_arrived',
+        label: 'Rider Arrived',
+        description: 'Rider has arrived at your location — please share delivery OTP',
+        by: 'rider',
+        timestamp: new Date(),
+      });
+      await order.save();
+    }
+
     const riderCheck = orderStateValidator.validateRiderDelivery(order, riderProfile._id);
     if (!riderCheck.valid) return res.status(400).json({ message: riderCheck.error });
+
+    const deliveryGeofenceCheck = getArrivalGeofenceResult(riderCoords, customerCoords, 'Customer');
+    if (!deliveryGeofenceCheck.valid) {
+      return sendError(res, deliveryGeofenceCheck.status, deliveryGeofenceCheck.message, deliveryGeofenceCheck.details);
+    }
+
     if (new Date() > order.deliveryOtpExpiresAt) {
       return res.status(400).json({
         message: "Delivery OTP expired. Request new one.",
@@ -2736,6 +2808,15 @@ exports.riderArrivedRestaurant = async (req, res) => {
         currentStatus: order.status,
       });
     }
+    const restaurantDoc = await Restaurant.findById(order.restaurant).select('owner contactNumber location');
+    const geofenceCheck = getArrivalGeofenceResult(
+      getCoordinatesOrNull(riderProfile.currentLocation),
+      getCoordinatesOrNull(restaurantDoc?.location),
+      'Restaurant',
+    );
+    if (!geofenceCheck.valid) {
+      return sendError(res, geofenceCheck.status, geofenceCheck.message, geofenceCheck.details);
+    }
     order.status = "reached_restaurant";
     order.timeline.push({
       status: "reached_restaurant",
@@ -2746,7 +2827,6 @@ exports.riderArrivedRestaurant = async (req, res) => {
     });
     await order.save();
     try {
-      const restaurantDoc = await Restaurant.findById(order.restaurant).select('owner contactNumber');
       if (restaurantDoc?.owner) {
         const ownerUser = await User.findById(restaurantDoc.owner).select('mobile');
         if (ownerUser?.mobile) await sendOTP(ownerUser.mobile, order.pickupOtp);
@@ -2815,6 +2895,14 @@ exports.riderArrivedCustomer = async (req, res) => {
         message: "Order must be picked up before marking arrival at customer",
         currentStatus: order.status,
       });
+    }
+    const geofenceCheck = getArrivalGeofenceResult(
+      getCoordinatesOrNull(riderProfile.currentLocation),
+      getCoordinatesOrNull(order.deliveryAddress),
+      'Customer',
+    );
+    if (!geofenceCheck.valid) {
+      return sendError(res, geofenceCheck.status, geofenceCheck.message, geofenceCheck.details);
     }
     order.status = "delivery_arrived";
     order.timeline.push({
