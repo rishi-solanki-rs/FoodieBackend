@@ -221,6 +221,7 @@ function buildBillingDataFromOrder(orderLike) {
     tip,
     paymentMethod: order.paymentMethod || null,
     paymentStatus: order.paymentStatus || null,
+    restaurantBillTotal: customerRestaurantBill,
     finalPayableAmount: r2(order.totalAmount ?? 0),
   };
 
@@ -518,9 +519,11 @@ async function generateCustomerInvoicePdfBuffer(order, billing) {
     const customer = order?.customer || {};
     const restaurant = order?.restaurant || {};
     const customerBill = billing.customerBill;
-    const foodInvoiceTotal = r2(customerBill.subTotal + customerBill.gstOnFood.total + customerBill.packaging.charge + customerBill.packaging.gst);
-    const chargeInvoiceTotal = r2(customerBill.platformFee.finalAmount + customerBill.platformFee.gst + customerBill.delivery.finalCharge + customerBill.delivery.gst + customerBill.tip + customerBill.smallCartFee);
+    const foodInvoiceTotal = r2(customerBill.restaurantBillTotal ?? (customerBill.subTotal + customerBill.gstOnFood.total + customerBill.packaging.charge + customerBill.packaging.gst));
+    const componentsChargeTotal = r2(customerBill.platformFee.finalAmount + customerBill.platformFee.gst + customerBill.delivery.finalCharge + customerBill.delivery.gst + customerBill.tip + customerBill.smallCartFee);
+    const chargeInvoiceTotal = r2(customerBill.finalPayableAmount - foodInvoiceTotal);
     const combinedInvoiceTotal = r2(foodInvoiceTotal + chargeInvoiceTotal);
+    const chargeRoundOffAdjustment = r2(chargeInvoiceTotal - componentsChargeTotal);
 
     const toWords = (num) => {
       const n = Math.floor(Math.max(0, Number(num) || 0));
@@ -580,51 +583,78 @@ async function generateCustomerInvoicePdfBuffer(order, billing) {
       doc.rect(left, y, leftW, headerH).stroke('#444444');
       doc.rect(left + leftW, y, rightW, headerH).stroke('#444444');
 
+      // ── Invoice To (left top) ──────────────────────────────────────────────
+      const customerName = customer?.name || customer?.firstName || '';
+      // Use delivery address on the order, falling back gracefully
+      const customerAddress = order?.deliveryAddress?.addressLine
+        || order?.deliveryAddress?.address
+        || [order?.customer?.address?.street, order?.customer?.address?.city].filter(Boolean).join(', ')
+        || '';
+
       doc.font('Helvetica').fontSize(9).text('Invoice To', left + 6, y + 8);
-      doc.font('Helvetica-Bold').fontSize(10.5).text(customer?.name || customer?.firstName || '', left + 6, y + 28, { width: leftW - 12 });
-      const customerAddress = [
-        customer?.address?.street,
-        customer?.address?.city,
-        customer?.address?.state,
-        customer?.address?.country,
-        customer?.address?.zipCode,
-      ].filter(Boolean).join(', ');
-      doc.font('Helvetica').fontSize(9).text(customerAddress || 'Address not available', left + 6, y + 50, { width: leftW - 12 });
+      doc.font('Helvetica-Bold').fontSize(10.5).text(customerName, left + 6, y + 22, { width: leftW - 12, lineBreak: false });
+      doc.font('Helvetica').fontSize(9).text(customerAddress || 'Address not available', left + 6, y + 38, { width: leftW - 12 });
 
-      doc.moveTo(left, y + 86).lineTo(left + leftW, y + 86).stroke('#444444');
-      doc.font('Helvetica-Bold').fontSize(8.5).text(issuedByLabel, left + 6, y + 92, { width: leftW - 12 });
-      doc.font('Helvetica-Bold').fontSize(10.5).text(restaurant?.name?.en || restaurant?.name || '', left + 6, y + 120, { width: leftW - 12 });
+      // Divider between Invoice-To and Issued-By sections
+      doc.moveTo(left, y + 82).lineTo(left + leftW, y + 82).stroke('#444444');
+      doc.font('Helvetica').fontSize(8.5).text(issuedByLabel, left + 6, y + 88, { width: leftW - 12 });
+      doc.font('Helvetica-Bold').fontSize(10.5).text(restaurant?.name?.en || restaurant?.name || '', left + 6, y + 104, { width: leftW - 12 });
       const gstNo = restaurant?.taxConfig?.gstNumber || 'NA';
-      doc.font('Helvetica-Bold').fontSize(10.5).text(`GSTIN: ${gstNo}`, left + 6, y + 138, { width: leftW - 12 });
+      doc.font('Helvetica').fontSize(9.5).text(`GSTIN: ${gstNo}`, left + 6, y + 122, { width: leftW - 12 });
 
-      const rightTopH = 54;
+      // ── Right top: Invoice No | Order Id | Date ───────────────────────────
+      // Give Order Id the most space since it holds a full 24-char hex
+      const rightTopH = 70;
       doc.moveTo(left + leftW, y + rightTopH).lineTo(left + width, y + rightTopH).stroke('#444444');
-      const c1 = 0.42;
-      const c2 = 0.28;
-      const x1 = left + leftW + (rightW * c1);
-      const x2 = x1 + (rightW * c2);
+
+      // Column split: Invoice No 33% | Order Id 44% | Date 23%
+      const x1 = left + leftW + Math.round(rightW * 0.33);
+      const x2 = x1 + Math.round(rightW * 0.44);
       doc.moveTo(x1, y).lineTo(x1, y + rightTopH).stroke('#444444');
       doc.moveTo(x2, y).lineTo(x2, y + rightTopH).stroke('#444444');
-      doc.font('Helvetica-Bold').fontSize(8.5).text('Invoice No', left + leftW + 6, y + 8);
-      doc.font('Helvetica').fontSize(11).text(invoiceNo, left + leftW + 6, y + 24, { width: (x1 - (left + leftW)) - 12 });
-      doc.font('Helvetica-Bold').fontSize(8.5).text('Order Id:', x1 + 6, y + 8);
-      doc.font('Helvetica').fontSize(11).text(String(orderDisplayId || ''), x1 + 6, y + 24, { width: (x2 - x1) - 12 });
-      doc.font('Helvetica-Bold').fontSize(8.5).text('Date', x2 + 6, y + 8);
-      doc.font('Helvetica').fontSize(11).text(pageDate, x2 + 6, y + 24, { width: (left + width - x2) - 12 });
+
+      const colInvW  = x1 - (left + leftW) - 12;
+      const colOrdW  = x2 - x1 - 12;
+      const colDateW = (left + width) - x2 - 12;
+
+      doc.font('Helvetica-Bold').fontSize(8).text('Invoice No', left + leftW + 6, y + 7);
+      doc.font('Helvetica').fontSize(9.5).text(invoiceNo, left + leftW + 6, y + 20, { width: colInvW });
+
+      doc.font('Helvetica-Bold').fontSize(8).text('Order Id:', x1 + 6, y + 7);
+      // Show full Order ID in smaller font so it wraps neatly inside the cell
+      doc.font('Helvetica').fontSize(8.5).text(String(orderDisplayId || ''), x1 + 6, y + 20, { width: colOrdW, lineBreak: true });
+
+      doc.font('Helvetica-Bold').fontSize(8).text('Date', x2 + 6, y + 7);
+      doc.font('Helvetica').fontSize(9.5).text(pageDate, x2 + 6, y + 20, { width: colDateW });
 
       y += headerH;
 
       const tableHeaderH = 34;
       doc.rect(left, y, width, tableHeaderH).fillAndStroke('#D9D9D9', '#444444');
       doc.fillColor('#000000').font('Helvetica-Bold').fontSize(9.5);
+      const fixedWidths = {
+        sno: 44,
+        price: 96,
+        hsn: 86,
+        gst: 52,
+        qty: 40,
+        taxable: 88,
+      };
+      const nameWidth = Math.max(110, width
+        - fixedWidths.sno
+        - fixedWidths.price
+        - fixedWidths.hsn
+        - fixedWidths.gst
+        - fixedWidths.qty
+        - fixedWidths.taxable);
       const cols = [
-        { key: 'sno', label: 'S.No.', w: 48, align: 'center' },
-        { key: 'name', label: 'Name', w: 202, align: 'left' },
-        { key: 'price', label: 'Item Price', w: 96, align: 'right' },
-        { key: 'hsn', label: 'HSN Code', w: 122, align: 'center' },
-        { key: 'gst', label: 'GST', w: 68, align: 'center' },
-        { key: 'qty', label: 'Qty', w: 62, align: 'center' },
-        { key: 'taxable', label: 'Taxable\nAmount', w: width - (48 + 202 + 96 + 122 + 68 + 62), align: 'right' },
+        { key: 'sno', label: 'S.No.', w: fixedWidths.sno, align: 'center' },
+        { key: 'name', label: 'Name', w: nameWidth, align: 'left' },
+        { key: 'price', label: 'Item Price', w: fixedWidths.price, align: 'right' },
+        { key: 'hsn', label: 'HSN Code', w: fixedWidths.hsn, align: 'center' },
+        { key: 'gst', label: 'GST', w: fixedWidths.gst, align: 'center' },
+        { key: 'qty', label: 'Qty', w: fixedWidths.qty, align: 'center' },
+        { key: 'taxable', label: 'Taxable\nAmount', w: fixedWidths.taxable, align: 'right' },
       ];
 
       let x = left;
@@ -663,11 +693,11 @@ async function generateCustomerInvoicePdfBuffer(order, billing) {
       doc.rect(left, y, width - 110, 30).stroke('#444444');
       doc.rect(left + width - 110, y, 110, 30).stroke('#444444');
       doc.font('Helvetica-Bold').fontSize(12).text('Total Amount', left + 12, y + 9);
-      doc.font('Helvetica-Bold').fontSize(12).text(totalAmount, left + width - 106, y + 9, { width: 102, align: 'right' });
+      doc.font('Helvetica-Bold').fontSize(12).text(formatAmount(totalAmount), left + width - 106, y + 9, { width: 102, align: 'right' });
       y += 30;
 
       doc.rect(left, y, width, 32).stroke('#444444');
-      doc.font('Helvetica-Bold').fontSize(10.5).text(toWords(Number(totalAmount.replace('₹', '').replace(/,/g, ''))), left + 12, y + 9, { width: width - 24 });
+      doc.font('Helvetica-Bold').fontSize(10.5).text(toWords(totalAmount), left + 12, y + 9, { width: width - 24 });
       y += 32;
 
       doc.font('Helvetica').fontSize(10).text('This is computer generated invoice', left, y + 8, { width, align: 'center' });
@@ -688,13 +718,13 @@ async function generateCustomerInvoicePdfBuffer(order, billing) {
     }));
 
     const foodTotals = [
-      { label: 'Total', amount: formatAmount(customerBill.itemsTotal) },
+      { label: 'Packaging Charges', amount: formatAmount(customerBill.packaging.charge) },
+      { label: 'GST on Packaging Charges', amount: formatAmount(customerBill.packaging.gst) },
       { label: 'Discount', amount: formatAmount(customerBill.restaurantDiscount) },
       { label: `CGST @${formatAmount(customerBill.gstOnFood.percent / 2)}%`, amount: formatAmount(customerBill.gstOnFood.cgst) },
       { label: `SGST @${formatAmount(customerBill.gstOnFood.percent / 2)}%`, amount: formatAmount(customerBill.gstOnFood.sgst) },
       { label: 'Total GST Amount', amount: formatAmount(customerBill.gstOnFood.total) },
-      { label: 'Packaging Charges', amount: formatAmount(customerBill.packaging.charge) },
-      { label: 'GST on Packaging Charges', amount: formatAmount(customerBill.packaging.gst) },
+      // { label: 'Total', amount: formatAmount(customerBill.itemsTotal) },
     ];
 
     drawInvoiceFrame({
@@ -703,7 +733,7 @@ async function generateCustomerInvoicePdfBuffer(order, billing) {
       pageDate: invoiceDate,
       rows: foodRows,
       totals: foodTotals,
-      totalAmount: formatCurrency(foodInvoiceTotal),
+      totalAmount: foodInvoiceTotal,
       issuedByLabel: 'Invoice issued by Foodie on behalf of:',
     });
 
@@ -722,7 +752,7 @@ async function generateCustomerInvoicePdfBuffer(order, billing) {
     ];
 
     const chargeTotals = [
-      { label: 'Total', amount: formatAmount(customerBill.platformFee.finalAmount) },
+      // { label: 'Total', amount: formatAmount(customerBill.platformFee.finalAmount) },
       { label: `CGST @${formatAmount((customerBill.platformFee.finalAmount > 0 ? (customerBill.platformFee.gst / customerBill.platformFee.finalAmount) * 100 : 0) / 2)}%`, amount: formatAmount(customerBill.platformFee.cgst) },
       { label: `SGST @${formatAmount((customerBill.platformFee.finalAmount > 0 ? (customerBill.platformFee.gst / customerBill.platformFee.finalAmount) * 100 : 0) / 2)}%`, amount: formatAmount(customerBill.platformFee.sgst) },
       { label: 'Total GST Amount', amount: formatAmount(customerBill.platformFee.gst) },
@@ -737,6 +767,7 @@ async function generateCustomerInvoicePdfBuffer(order, billing) {
         : [{ label: 'Coupon Discount', amount: formatAmount(customerBill.couponDiscount) }]),
       { label: 'Tip', amount: formatAmount(customerBill.tip) },
       { label: 'Small Cart Fee', amount: formatAmount(customerBill.smallCartFee) },
+      ...(!nearlyEqual(chargeRoundOffAdjustment, 0) ? [{ label: 'Round Off Adjustment', amount: formatAmount(chargeRoundOffAdjustment) }] : []),
     ];
 
     drawInvoiceFrame({
@@ -745,7 +776,7 @@ async function generateCustomerInvoicePdfBuffer(order, billing) {
       pageDate: invoiceDate,
       rows: chargeRows,
       totals: chargeTotals,
-      totalAmount: formatCurrency(chargeInvoiceTotal),
+      totalAmount: chargeInvoiceTotal,
       issuedByLabel: 'Invoice issued by Foodie:',
     });
 
