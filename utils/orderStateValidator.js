@@ -3,11 +3,11 @@ const logger = require('./logger');
 const validTransitions = {
   "pending": ["placed", "failed", "cancelled"],
   "placed": ["accepted", "cancelled"],
-  "accepted": ["preparing", "cancelled"],
-  "preparing": ["ready", "cancelled"],
-  "ready": ["assigned"],
-  "assigned": ["reached_restaurant", "picked_up", "cancelled"],
-  "reached_restaurant": ["picked_up"],
+  "accepted": ["preparing", "assigned", "cancelled"],
+  "preparing": ["ready", "assigned", "reached_restaurant", "cancelled"],
+  "ready": ["assigned", "reached_restaurant", "picked_up", "cancelled"],
+  "assigned": ["preparing", "ready", "reached_restaurant", "picked_up", "cancelled"],
+  "reached_restaurant": ["preparing", "ready", "picked_up", "cancelled"],
   "picked_up": ["delivery_arrived"],
   "delivery_arrived": ["delivered"],
   "delivered": [],
@@ -132,8 +132,13 @@ const validateRestaurantAcceptance = (order) => {
   return { valid: true, error: null };
 };
 const validateRestaurantMarkReady = (order) => {
-  if (order.status !== ORDER_STATES.PREPARING) {
-    return { valid: false, error: `Order must be 'preparing' to mark ready.` };
+  const readyAllowedStatuses = [
+    ORDER_STATES.PREPARING,
+    ORDER_STATES.ASSIGNED,
+    ORDER_STATES.REACHED_RESTAURANT,
+  ];
+  if (!readyAllowedStatuses.includes(order.status)) {
+    return { valid: false, error: `Order must be preparing/assigned/reached_restaurant to mark ready.` };
   }
   return { valid: true, error: null };
 };

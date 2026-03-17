@@ -110,14 +110,40 @@ exports.getOverview = async (req, res) => {
       salesSeries.push({ month: label, orders: row ? row.orders : 0 });
     }
     const recentOrdersDocs = await Order.find({})
-      .select("_id status totalAmount createdAt")
+      .select("_id orderNumber status totalAmount createdAt timeline customer restaurant rider")
+      .populate('customer', 'name')
+      .populate('restaurant', 'name')
+      .populate({ path: 'rider', select: 'user name', populate: { path: 'user', select: 'name' } })
       .sort({ createdAt: -1 })
-      .limit(5)
+      .limit(15)
       .lean();
+
+    const toDisplayName = (value) => {
+      if (!value) return null;
+      if (typeof value === 'string') return value;
+      if (typeof value === 'object') {
+        if (value.en) return value.en;
+        if (value.name) return toDisplayName(value.name);
+      }
+      return null;
+    };
+
     const recentOrders = recentOrdersDocs.map((o) => ({
       id: String(o._id),
+      orderNumber: o.orderNumber || null,
       status: o.status,
       amount: Number(o.totalAmount || 0).toFixed(2),
+      customerName: toDisplayName(o.customer?.name) || 'Customer',
+      restaurantName: toDisplayName(o.restaurant?.name) || 'Restaurant',
+      riderName: toDisplayName(o.rider?.user?.name) || toDisplayName(o.rider?.name) || null,
+      timeline: Array.isArray(o.timeline)
+        ? o.timeline.map((entry) => ({
+            status: entry?.status,
+            label: entry?.label || null,
+            timestamp: entry?.timestamp || null,
+            description: entry?.description || null,
+          }))
+        : [],
     }));
     const topRestaurantsAgg = await Order.aggregate([
       { $match: deliveredMatch },

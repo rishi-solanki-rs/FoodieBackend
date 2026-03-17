@@ -2802,9 +2802,9 @@ exports.riderArrivedRestaurant = async (req, res) => {
       order.rider.toString() !== riderProfile._id.toString()
     )
       return res.status(403).json({ message: "Not assigned to you" });
-    if (order.status !== "assigned") {
+    if (!["assigned", "preparing", "ready"].includes(order.status)) {
       return res.status(400).json({
-        message: "Order must be in assigned status to mark restaurant arrival",
+        message: "Order must be in assigned/preparing/ready status to mark restaurant arrival",
         currentStatus: order.status,
       });
     }
