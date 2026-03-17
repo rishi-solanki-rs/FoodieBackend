@@ -3432,18 +3432,17 @@ exports.getRestaurantBillingHistory = async (req, res) => {
     if (!req.user || !isValidObjectId(req.user._id)) return sendError(res, 401, 'Unauthorized');
     const restaurant = await Restaurant.findOne({ owner: req.user._id }).select('_id').lean();
     if (!restaurant) return sendError(res, 404, 'Restaurant not found');
-    const { page = 1, limit = 20 } = req.query;
-    const { skip, take } = getPaginationParams(page, limit);
+    const { page, limit, skip } = getPaginationParams(req, 20);
     const [bills, total] = await Promise.all([
       RestaurantBill.find({ restaurant: restaurant._id })
         .sort({ createdAt: -1 })
         .skip(skip)
-        .limit(take)
+        .limit(limit)
         .populate('order', 'status createdAt totalAmount paymentMethod')
         .lean(),
       RestaurantBill.countDocuments({ restaurant: restaurant._id }),
     ]);
-    return res.status(200).json({ success: true, bills, total, page: Number(page), limit: Number(limit) });
+    return res.status(200).json({ success: true, bills, total, page, limit });
   } catch (err) {
     return sendError(res, 500, 'Failed to fetch billing history', err.message);
   }
@@ -3455,18 +3454,17 @@ exports.getRiderBillingHistory = async (req, res) => {
     if (!req.user || !isValidObjectId(req.user._id)) return sendError(res, 401, 'Unauthorized');
     const riderProfile = await Rider.findOne({ user: req.user._id }).select('_id').lean();
     if (!riderProfile) return sendError(res, 404, 'Rider profile not found');
-    const { page = 1, limit = 20 } = req.query;
-    const { skip, take } = getPaginationParams(page, limit);
+    const { page, limit, skip } = getPaginationParams(req, 20);
     const [bills, total] = await Promise.all([
       RiderBill.find({ rider: riderProfile._id })
         .sort({ createdAt: -1 })
         .skip(skip)
-        .limit(take)
+        .limit(limit)
         .populate('order', 'status createdAt totalAmount paymentMethod deliveredAt')
         .lean(),
       RiderBill.countDocuments({ rider: riderProfile._id }),
     ]);
-    return res.status(200).json({ success: true, bills, total, page: Number(page), limit: Number(limit) });
+    return res.status(200).json({ success: true, bills, total, page, limit });
   } catch (err) {
     return sendError(res, 500, 'Failed to fetch rider billing history', err.message);
   }

@@ -568,7 +568,7 @@ async function generateCustomerInvoicePdfBuffer(order, billing) {
       return `${rupeesWords} Rupees${paiseWords} only`;
     };
 
-    const drawInvoiceFrame = ({ invoiceNo, orderDisplayId, pageDate, rows, totals, totalAmount, issuedByLabel }) => {
+    const drawInvoiceFrame = ({ invoiceNo, orderDisplayId, pageDate, rows, totals, totalAmount, issuedByLabel, columns }) => {
       const left = doc.page.margins.left;
       const width = doc.page.width - doc.page.margins.left - doc.page.margins.right;
       let y = doc.page.margins.top;
@@ -580,12 +580,12 @@ async function generateCustomerInvoicePdfBuffer(order, billing) {
       const leftW = 230;
       const rightW = width - leftW;
       const headerH = 160;
+      const rightTopH = 70;
+
       doc.rect(left, y, leftW, headerH).stroke('#444444');
       doc.rect(left + leftW, y, rightW, headerH).stroke('#444444');
 
-      // ── Invoice To (left top) ──────────────────────────────────────────────
       const customerName = customer?.name || customer?.firstName || '';
-      // Use delivery address on the order, falling back gracefully
       const customerAddress = order?.deliveryAddress?.addressLine
         || order?.deliveryAddress?.address
         || [order?.customer?.address?.street, order?.customer?.address?.city].filter(Boolean).join(', ')
@@ -595,72 +595,78 @@ async function generateCustomerInvoicePdfBuffer(order, billing) {
       doc.font('Helvetica-Bold').fontSize(10.5).text(customerName, left + 6, y + 22, { width: leftW - 12, lineBreak: false });
       doc.font('Helvetica').fontSize(9).text(customerAddress || 'Address not available', left + 6, y + 38, { width: leftW - 12 });
 
-      // Divider between Invoice-To and Issued-By sections
       doc.moveTo(left, y + 82).lineTo(left + leftW, y + 82).stroke('#444444');
       doc.font('Helvetica').fontSize(8.5).text(issuedByLabel, left + 6, y + 88, { width: leftW - 12 });
       doc.font('Helvetica-Bold').fontSize(10.5).text(restaurant?.name?.en || restaurant?.name || '', left + 6, y + 104, { width: leftW - 12 });
-      const gstNo = restaurant?.taxConfig?.gstNumber || 'NA';
-      doc.font('Helvetica').fontSize(9.5).text(`GSTIN: ${gstNo}`, left + 6, y + 122, { width: leftW - 12 });
+      doc.font('Helvetica').fontSize(9.5).text(`GSTIN: ${restaurant?.taxConfig?.gstNumber || 'NA'}`, left + 6, y + 122, { width: leftW - 12 });
 
-      // ── Right top: Invoice No | Order Id | Date ───────────────────────────
-      // Give Order Id the most space since it holds a full 24-char hex
-      const rightTopH = 70;
       doc.moveTo(left + leftW, y + rightTopH).lineTo(left + width, y + rightTopH).stroke('#444444');
-
-      // Column split: Invoice No 33% | Order Id 44% | Date 23%
       const x1 = left + leftW + Math.round(rightW * 0.33);
       const x2 = x1 + Math.round(rightW * 0.44);
       doc.moveTo(x1, y).lineTo(x1, y + rightTopH).stroke('#444444');
       doc.moveTo(x2, y).lineTo(x2, y + rightTopH).stroke('#444444');
 
-      const colInvW  = x1 - (left + leftW) - 12;
-      const colOrdW  = x2 - x1 - 12;
+      const colInvW = x1 - (left + leftW) - 12;
+      const colOrdW = x2 - x1 - 12;
       const colDateW = (left + width) - x2 - 12;
 
       doc.font('Helvetica-Bold').fontSize(8).text('Invoice No', left + leftW + 6, y + 7);
       doc.font('Helvetica').fontSize(9.5).text(invoiceNo, left + leftW + 6, y + 20, { width: colInvW });
-
       doc.font('Helvetica-Bold').fontSize(8).text('Order Id:', x1 + 6, y + 7);
-      // Show full Order ID in smaller font so it wraps neatly inside the cell
       doc.font('Helvetica').fontSize(8.5).text(String(orderDisplayId || ''), x1 + 6, y + 20, { width: colOrdW, lineBreak: true });
-
       doc.font('Helvetica-Bold').fontSize(8).text('Date', x2 + 6, y + 7);
       doc.font('Helvetica').fontSize(9.5).text(pageDate, x2 + 6, y + 20, { width: colDateW });
 
       y += headerH;
 
       const tableHeaderH = 34;
+      const tableColsInput = Array.isArray(columns) && columns.length > 0
+        ? columns.map((c) => ({ ...c }))
+        : [
+            { key: 'sno', label: 'S.No.', w: 44, align: 'center' },
+            { key: 'name', label: 'Description', w: 180, align: 'left' },
+            { key: 'amount', label: 'Amount', w: 78, align: 'right' },
+            { key: 'discount', label: 'Discount', w: 78, align: 'right' },
+            { key: 'taxable', label: 'Taxable', w: 78, align: 'right' },
+            { key: 'gstPercent', label: 'GST %', w: 56, align: 'center' },
+            { key: 'gstAmount', label: 'GST Amount', w: 78, align: 'right' },
+            { key: 'total', label: 'Total', w: 64, align: 'right' },
+          ];
+
+      // Keep table strictly within page width even if custom columns are oversized.
+      const minColWidth = 34;
+      const tableCols = tableColsInput.map((col) => ({ ...col }));
+      const rawWidth = tableCols.reduce((sum, c) => sum + (Number(c.w) || 0), 0);
+      const scale = rawWidth > 0 ? (width / rawWidth) : 1;
+      tableCols.forEach((col) => {
+        col.w = Math.max(minColWidth, Math.floor((Number(col.w) || minColWidth) * scale));
+      });
+
+      let adjustedWidth = tableCols.reduce((sum, c) => sum + c.w, 0);
+      let remainder = Math.round(width - adjustedWidth);
+      if (remainder !== 0) {
+        tableCols[tableCols.length - 1].w += remainder;
+      }
+
+      // If rounding made the last col too small, borrow pixels from earlier columns.
+      if (tableCols[tableCols.length - 1].w < minColWidth) {
+        let deficit = minColWidth - tableCols[tableCols.length - 1].w;
+        tableCols[tableCols.length - 1].w = minColWidth;
+        for (let i = tableCols.length - 2; i >= 0 && deficit > 0; i -= 1) {
+          const spare = Math.max(0, tableCols[i].w - minColWidth);
+          const take = Math.min(spare, deficit);
+          tableCols[i].w -= take;
+          deficit -= take;
+        }
+      }
+
       doc.rect(left, y, width, tableHeaderH).fillAndStroke('#D9D9D9', '#444444');
       doc.fillColor('#000000').font('Helvetica-Bold').fontSize(9.5);
-      const fixedWidths = {
-        sno: 44,
-        price: 96,
-        hsn: 86,
-        gst: 52,
-        qty: 40,
-        taxable: 88,
-      };
-      const nameWidth = Math.max(110, width
-        - fixedWidths.sno
-        - fixedWidths.price
-        - fixedWidths.hsn
-        - fixedWidths.gst
-        - fixedWidths.qty
-        - fixedWidths.taxable);
-      const cols = [
-        { key: 'sno', label: 'S.No.', w: fixedWidths.sno, align: 'center' },
-        { key: 'name', label: 'Name', w: nameWidth, align: 'left' },
-        { key: 'price', label: 'Item Price', w: fixedWidths.price, align: 'right' },
-        { key: 'hsn', label: 'HSN Code', w: fixedWidths.hsn, align: 'center' },
-        { key: 'gst', label: 'GST', w: fixedWidths.gst, align: 'center' },
-        { key: 'qty', label: 'Qty', w: fixedWidths.qty, align: 'center' },
-        { key: 'taxable', label: 'Taxable\nAmount', w: fixedWidths.taxable, align: 'right' },
-      ];
 
       let x = left;
-      cols.forEach((col) => {
+      tableCols.forEach((col) => {
         doc.rect(x, y, col.w, tableHeaderH).stroke('#444444');
-        doc.text(col.label, x + 4, y + 8, { width: col.w - 8, align: col.align });
+        doc.text(col.label, x + 4, y + 8, { width: col.w - 8, align: col.align, lineBreak: false });
         x += col.w;
       });
 
@@ -669,10 +675,10 @@ async function generateCustomerInvoicePdfBuffer(order, billing) {
       doc.font('Helvetica').fontSize(10);
       rows.forEach((row) => {
         let rowX = left;
-        cols.forEach((col) => {
+        tableCols.forEach((col) => {
           doc.rect(rowX, y, col.w, rowH).stroke('#444444');
           const value = row[col.key] ?? '';
-          doc.text(String(value), rowX + 4, y + 8, { width: col.w - 8, align: col.align });
+          doc.text(String(value), rowX + 4, y + 8, { width: col.w - 8, align: col.align, lineBreak: false });
           rowX += col.w;
         });
         y += rowH;
@@ -707,24 +713,51 @@ async function generateCustomerInvoicePdfBuffer(order, billing) {
       ? new Date(billing.orderMeta.createdAt).toISOString().slice(0, 10)
       : new Date().toISOString().slice(0, 10);
 
-    const foodRows = customerBill.items.map((item, index) => ({
-      sno: index + 1,
-      name: item.name,
-      price: formatAmount(item.rate),
-      hsn: '996331',
-      gst: `${formatAmount(customerBill.gstOnFood.percent)}%`,
-      qty: item.qty,
-      taxable: formatAmount(item.total),
-    }));
+    const foodDiscountRatio = customerBill.itemsTotal > 0
+      ? r2(customerBill.restaurantDiscount / customerBill.itemsTotal)
+      : 0;
+    const foodGstRatio = customerBill.subTotal > 0
+      ? r2(customerBill.gstOnFood.total / customerBill.subTotal)
+      : 0;
+
+    const foodRows = customerBill.items.map((item, index) => {
+      const lineAmount = r2(item.total);
+      const lineDiscount = r2(lineAmount * foodDiscountRatio);
+      const lineTaxable = r2(lineAmount - lineDiscount);
+      const lineGst = r2(lineTaxable * foodGstRatio);
+      return {
+        sno: index + 1,
+        name: item.name,
+        amount: formatAmount(lineAmount),
+        discount: formatAmount(lineDiscount),
+        taxable: formatAmount(lineTaxable),
+        gstPercent: `${formatAmount(customerBill.gstOnFood.percent)}%`,
+        gstAmount: formatAmount(lineGst),
+        total: formatAmount(lineTaxable + lineGst),
+      };
+    });
+    if (customerBill.packaging.charge > 0) {
+      foodRows.push({
+        sno: foodRows.length + 1,
+        name: 'Packaging Charges',
+        amount: formatAmount(customerBill.packaging.charge),
+        discount: formatAmount(0),
+        taxable: formatAmount(customerBill.packaging.charge),
+        gstPercent: `${formatAmount(customerBill.packaging.charge > 0 ? (customerBill.packaging.gst / customerBill.packaging.charge) * 100 : 0)}%`,
+        gstAmount: formatAmount(customerBill.packaging.gst),
+        total: formatAmount(customerBill.packaging.total),
+      });
+    }
+
+    const firstPageCgst = r2(customerBill.gstOnFood.cgst + customerBill.packaging.cgst);
+    const firstPageSgst = r2(customerBill.gstOnFood.sgst + customerBill.packaging.sgst);
+    const firstPageTotalGst = r2(customerBill.gstOnFood.total + customerBill.packaging.gst);
 
     const foodTotals = [
-      { label: 'Packaging Charges', amount: formatAmount(customerBill.packaging.charge) },
-      { label: 'GST on Packaging Charges', amount: formatAmount(customerBill.packaging.gst) },
       { label: 'Discount', amount: formatAmount(customerBill.restaurantDiscount) },
-      { label: `CGST @${formatAmount(customerBill.gstOnFood.percent / 2)}%`, amount: formatAmount(customerBill.gstOnFood.cgst) },
-      { label: `SGST @${formatAmount(customerBill.gstOnFood.percent / 2)}%`, amount: formatAmount(customerBill.gstOnFood.sgst) },
-      { label: 'Total GST Amount', amount: formatAmount(customerBill.gstOnFood.total) },
-      // { label: 'Total', amount: formatAmount(customerBill.itemsTotal) },
+      { label: 'CGST', amount: formatAmount(firstPageCgst) },
+      { label: 'SGST', amount: formatAmount(firstPageSgst) },
+      { label: 'Total GST Amount', amount: formatAmount(firstPageTotalGst) },
     ];
 
     drawInvoiceFrame({
@@ -735,6 +768,16 @@ async function generateCustomerInvoicePdfBuffer(order, billing) {
       totals: foodTotals,
       totalAmount: foodInvoiceTotal,
       issuedByLabel: 'Invoice issued by Foodie on behalf of:',
+      columns: [
+        { key: 'sno', label: 'S.No.', w: 35, align: 'center' },
+        { key: 'name', label: 'Description', w: 125, align: 'left' },
+        { key: 'amount', label: 'Amount', w: 60, align: 'right' },
+        { key: 'discount', label: 'Discount', w: 60, align: 'right' },
+        { key: 'taxable', label: 'Taxable', w: 60, align: 'right' },
+        { key: 'gstPercent', label: 'GST %', w: 45, align: 'center' },
+        { key: 'gstAmount', label: 'GST Amt', w: 60, align: 'right' },
+        { key: 'total', label: 'Total', w: 70, align: 'right' },
+      ],
     });
 
     doc.addPage();
@@ -743,25 +786,31 @@ async function generateCustomerInvoicePdfBuffer(order, billing) {
       {
         sno: 1,
         name: 'Platform Fee',
-        price: formatAmount(customerBill.platformFee.finalAmount),
-        hsn: '996211',
-        gst: `${formatAmount(customerBill.platformFee.finalAmount > 0 ? (customerBill.platformFee.gst / customerBill.platformFee.finalAmount) * 100 : 0)}%`,
-        qty: 1,
+        amount: formatAmount(customerBill.platformFee.amount),
+        discount: formatAmount(customerBill.platformFee.discountApplied),
         taxable: formatAmount(customerBill.platformFee.finalAmount),
+        gstPercent: `${formatAmount(customerBill.platformFee.percent || (customerBill.platformFee.finalAmount > 0 ? (customerBill.platformFee.gst / customerBill.platformFee.finalAmount) * 100 : 0))}%`,
+        gstAmount: formatAmount(customerBill.platformFee.gst),
+        total: formatAmount(customerBill.platformFee.total),
+      },
+      {
+        sno: 2,
+        name: 'Delivery Charges',
+        amount: formatAmount(customerBill.delivery.originalCharge),
+        discount: formatAmount(customerBill.delivery.discountApplied),
+        taxable: formatAmount(customerBill.delivery.finalCharge),
+        gstPercent: `${formatAmount(customerBill.delivery.percent || (customerBill.delivery.finalCharge > 0 ? (customerBill.delivery.gst / customerBill.delivery.finalCharge) * 100 : 0))}%`,
+        gstAmount: formatAmount(customerBill.delivery.gst),
+        total: formatAmount(customerBill.delivery.total),
       },
     ];
 
     const chargeTotals = [
-      // { label: 'Total', amount: formatAmount(customerBill.platformFee.finalAmount) },
-      { label: `CGST @${formatAmount((customerBill.platformFee.finalAmount > 0 ? (customerBill.platformFee.gst / customerBill.platformFee.finalAmount) * 100 : 0) / 2)}%`, amount: formatAmount(customerBill.platformFee.cgst) },
-      { label: `SGST @${formatAmount((customerBill.platformFee.finalAmount > 0 ? (customerBill.platformFee.gst / customerBill.platformFee.finalAmount) * 100 : 0) / 2)}%`, amount: formatAmount(customerBill.platformFee.sgst) },
-      { label: 'Total GST Amount', amount: formatAmount(customerBill.platformFee.gst) },
-      { label: 'Delivery Charges', amount: formatAmount(customerBill.delivery.originalCharge) },
+      { label: 'CGST', amount: formatAmount(r2(customerBill.platformFee.cgst + customerBill.delivery.cgst)) },
+      { label: 'SGST', amount: formatAmount(r2(customerBill.platformFee.sgst + customerBill.delivery.sgst)) },
+      { label: 'Total GST Amount', amount: formatAmount(r2(customerBill.platformFee.gst + customerBill.delivery.gst)) },
       { label: 'Delivery Discount', amount: formatAmount(customerBill.delivery.discountApplied) },
       { label: 'Final Delivery Charges', amount: formatAmount(customerBill.delivery.finalCharge) },
-      ...(customerBill.delivery.gst > 0
-        ? [{ label: 'Delivery Charges GST', amount: formatAmount(customerBill.delivery.gst) }]
-        : []),
       ...(customerBill.couponType === 'free_delivery'
         ? [{ label: 'Free Delivery Applied', amount: formatAmount(customerBill.delivery.discountApplied) }]
         : [{ label: 'Coupon Discount', amount: formatAmount(customerBill.couponDiscount) }]),
@@ -778,6 +827,16 @@ async function generateCustomerInvoicePdfBuffer(order, billing) {
       totals: chargeTotals,
       totalAmount: chargeInvoiceTotal,
       issuedByLabel: 'Invoice issued by Foodie:',
+      columns: [
+        { key: 'sno', label: 'S.No.', w: 35, align: 'center' },
+        { key: 'name', label: 'Description', w: 110, align: 'left' },
+        { key: 'amount', label: 'Amount', w: 70, align: 'right' },
+        { key: 'discount', label: 'Discount', w: 70, align: 'right' },
+        { key: 'taxable', label: 'Taxable', w: 60, align: 'right' },
+        { key: 'gstPercent', label: 'GST %', w: 50, align: 'center' },
+        { key: 'gstAmount', label: 'GST Amt', w: 70, align: 'right' },
+        { key: 'total', label: 'Total', w: 50, align: 'right' },
+      ],
     });
 
     if (!nearlyEqual(combinedInvoiceTotal, customerBill.finalPayableAmount)) {
