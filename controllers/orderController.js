@@ -28,7 +28,7 @@ const { calculateSettlementBreakdown } = require('../services/settlementCalculat
 const { validateOrderFinancialIntegrity } = require('../services/financialIntegrityService');
 const { processSettlement } = require('../services/settlementService');
 const { computeDeliveryFee, getAdminSettings } = require('../services/priceCalculator');
-const { buildBillingDataFromOrder, validateBillingData, generateInvoicePdfBuffer } = require('../services/billingService');
+const { buildBillingDataFromOrder, validateBillingData, generateInvoicePdfBuffer, generateCustomerInvoicePdfBuffer } = require('../services/billingService');
 const {
   logger,
   logOrderTransition,
@@ -3395,6 +3395,34 @@ exports.getOrderInvoice = async (req, res) => {
     return res.status(200).send(pdfBuffer);
   } catch (err) {
     return sendError(res, 500, 'Failed to generate invoice PDF', err.message);
+  }
+};
+
+exports.getCustomerInvoice = async (req, res) => {
+  try {
+    const order = await Order.findById(req.params.id)
+      .populate('customer', 'name email phone mobile')
+      .populate('restaurant', 'name address taxConfig contactNumber');
+
+    if (!order) return sendError(res, 404, 'Order not found');
+
+    const access = await canAccessOrderBilling(req, order);
+    if (!access.allowed) {
+      return sendError(res, access.status, access.message);
+    }
+
+    const billing = buildBillingSectionsFromOrder(order.toObject ? order.toObject() : order);
+    const validation = validateBillingData(billing);
+    if (!validation.isValid) {
+      return sendError(res, 500, 'Billing validation failed', validation.issues);
+    }
+
+    const pdfBuffer = await generateCustomerInvoicePdfBuffer(order.toObject ? order.toObject() : order, billing);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename=customer_invoice_${order._id}.pdf`);
+    return res.status(200).send(pdfBuffer);
+  } catch (err) {
+    return sendError(res, 500, 'Failed to generate customer invoice PDF', err.message);
   }
 };
 

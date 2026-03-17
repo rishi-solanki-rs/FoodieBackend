@@ -51,6 +51,8 @@ const formatAmount = (value) => {
   return rounded.toFixed(5).replace(/\.?0+$/, '');
 };
 
+const formatCurrency = (value) => `₹${formatAmount(value)}`;
+
 const normalizeItemName = (item) => {
   if (typeof item?.name === 'string') return item.name;
   return item?.name?.en || item?.name?.de || item?.name?.ar || 'Item';
@@ -354,6 +356,31 @@ function drawTable(doc, title, columns, rows) {
   });
 }
 
+function drawAmountTable(doc, title, rows) {
+  drawTable(
+    doc,
+    title,
+    [
+      { label: 'Description', width: 330 },
+      { label: 'Amount', width: 160, align: 'right' },
+    ],
+    rows,
+  );
+}
+
+function drawSectionHeading(doc, title) {
+  ensureSpace(doc, 28);
+  doc.moveDown(0.4);
+  doc.font('Helvetica-Bold').fontSize(13).fillColor('#000000').text(title);
+}
+
+function drawInfoLine(doc, label, value) {
+  ensureSpace(doc, 16);
+  const y = doc.y;
+  doc.font('Helvetica-Bold').fontSize(10).text(label, doc.page.margins.left, y, { continued: true });
+  doc.font('Helvetica').text(` ${value ?? ''}`);
+}
+
 function createPdfBuffer(docBuilder) {
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({ margin: 40, size: 'A4' });
@@ -482,6 +509,101 @@ async function generateInvoicePdfBuffer(order, billing) {
       billing.validation.issues.forEach((issue) => {
         doc.text(`- ${issue}`);
       });
+    }
+  });
+}
+
+async function generateCustomerInvoicePdfBuffer(order, billing) {
+  return createPdfBuffer((doc) => {
+    const customer = order?.customer || {};
+    const restaurant = order?.restaurant || {};
+    const customerBill = billing.customerBill;
+    const visibleGstTotal = r2(
+      (customerBill.gstOnFood.total || 0)
+      + (customerBill.packaging.gst || 0)
+      + (customerBill.platformFee.gst || 0)
+      + (customerBill.delivery.gst || 0)
+    );
+
+    doc.font('Helvetica-Bold').fontSize(18).text('Customer Invoice', { align: 'center' });
+    doc.moveDown(0.6);
+
+    drawSectionHeading(doc, 'Order Info');
+    drawInfoLine(doc, 'Order ID:', billing.orderMeta.orderId || '');
+    drawInfoLine(doc, 'Status:', billing.orderMeta.status || '');
+    drawInfoLine(doc, 'Created At:', billing.orderMeta.createdAt ? new Date(billing.orderMeta.createdAt).toISOString() : '');
+    drawInfoLine(doc, 'Customer:', customer?.name || customer?.firstName || billing.orderMeta.customerId || '');
+    drawInfoLine(doc, 'Restaurant:', restaurant?.name?.en || restaurant?.name || billing.orderMeta.restaurantId || '');
+    drawInfoLine(doc, 'Payment Method:', billing.orderMeta.paymentMethod || '');
+    drawInfoLine(doc, 'Payment Status:', billing.orderMeta.paymentStatus || '');
+
+    drawAmountTable(
+      doc,
+      'Items Table',
+      customerBill.items.map((item) => [
+        `${item.name} x ${item.qty} @ ${formatCurrency(item.rate)}`,
+        formatCurrency(item.total),
+      ]),
+    );
+
+    drawAmountTable(doc, 'Pricing Summary', [
+      ['Items Total', formatCurrency(customerBill.itemsTotal)],
+      ['Restaurant Discount', formatCurrency(-customerBill.restaurantDiscount)],
+      ['Sub Total', formatCurrency(customerBill.subTotal)],
+    ]);
+
+    const gstRows = [
+      [`Food GST (${formatAmount(customerBill.gstOnFood.percent)}%)`, formatCurrency(customerBill.gstOnFood.total)],
+      [`CGST (${formatAmount(customerBill.gstOnFood.percent / 2)}%)`, formatCurrency(customerBill.gstOnFood.cgst)],
+      [`SGST (${formatAmount(customerBill.gstOnFood.percent / 2)}%)`, formatCurrency(customerBill.gstOnFood.sgst)],
+      ['Packaging CGST', formatCurrency(customerBill.packaging.cgst)],
+      ['Packaging SGST', formatCurrency(customerBill.packaging.sgst)],
+      ['Platform CGST', formatCurrency(customerBill.platformFee.cgst)],
+      ['Platform SGST', formatCurrency(customerBill.platformFee.sgst)],
+    ];
+    if (customerBill.delivery.gst > 0) {
+      gstRows.push(['Delivery CGST', formatCurrency(customerBill.delivery.cgst)]);
+      gstRows.push(['Delivery SGST', formatCurrency(customerBill.delivery.sgst)]);
+    }
+    gstRows.push(['Visible GST Total', formatCurrency(visibleGstTotal)]);
+    drawAmountTable(doc, 'GST Breakdown', gstRows);
+
+    drawAmountTable(doc, 'Charges', [
+      ['Packaging Charge', formatCurrency(customerBill.packaging.charge)],
+      ['Packaging GST', formatCurrency(customerBill.packaging.gst)],
+      ['Platform Fee', formatCurrency(customerBill.platformFee.amount)],
+      ['Platform Fee Discount', formatCurrency(-customerBill.platformFee.discountApplied)],
+      ['Platform Fee Final', formatCurrency(customerBill.platformFee.finalAmount)],
+      ['Platform GST', formatCurrency(customerBill.platformFee.gst)],
+      ['Delivery Fee', formatCurrency(customerBill.delivery.originalCharge)],
+      ['Delivery Discount', formatCurrency(-customerBill.delivery.discountApplied)],
+      ['Final Delivery', formatCurrency(customerBill.delivery.finalCharge)],
+      ...(customerBill.delivery.gst > 0 ? [['Delivery GST', formatCurrency(customerBill.delivery.gst)]] : []),
+    ]);
+
+    const couponLabel = customerBill.couponType === 'free_delivery'
+      ? `Free Delivery Applied (-${formatCurrency(customerBill.delivery.discountApplied)})`
+      : (customerBill.couponCode ? `Coupon Applied (${customerBill.couponCode})` : 'Coupon');
+    const couponAmount = customerBill.couponType === 'free_delivery'
+      ? formatCurrency(-customerBill.delivery.discountApplied)
+      : formatCurrency(-customerBill.couponDiscount);
+    drawAmountTable(doc, 'Coupon', [
+      [couponLabel, couponAmount],
+    ]);
+
+    drawAmountTable(doc, 'Tip', [
+      ['Tip', formatCurrency(customerBill.tip)],
+    ]);
+
+    drawAmountTable(doc, 'Final Total', [
+      ['Small Cart Fee', formatCurrency(customerBill.smallCartFee)],
+      ['Final Payable Amount', formatCurrency(customerBill.finalPayableAmount)],
+    ]);
+
+    if (!billing.validation.isValid) {
+      drawSectionHeading(doc, 'Validation Notes');
+      doc.font('Helvetica').fontSize(10);
+      billing.validation.issues.forEach((issue) => doc.text(`- ${issue}`));
     }
   });
 }
@@ -637,4 +759,5 @@ module.exports = {
   buildBillingDataFromOrder,
   validateBillingData,
   generateInvoicePdfBuffer,
+  generateCustomerInvoicePdfBuffer,
 };
