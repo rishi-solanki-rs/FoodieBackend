@@ -379,6 +379,21 @@ async function calculateOrderPrice({
       adminCommissionGstPercent: adminSettings.adminCommissionGstPercent,
     });
 
+    logger.info('Delivery GST computation debug', {
+      event: 'DELIVERY_GST_DEBUG',
+      couponCode: couponCode || null,
+      couponType: couponResult.couponType || null,
+      freeDelivery: Boolean(couponResult.freeDelivery),
+      deliveryFeeBeforeDiscount: deliveryFee,
+      deliveryFeeAfterDiscount: settlement.deliveryFeeAfterDiscount,
+      deliveryDiscountUsed: settlement.deliveryDiscountUsed,
+      deliveryChargeGstPercent: adminSettings.deliveryChargeGstPercent,
+      deliveryGSTFinal: settlement.deliveryGST,
+      cgstDelivery: settlement.cgstDelivery,
+      sgstDelivery: settlement.sgstDelivery,
+      adminDeliverySubsidy: settlement.adminDeliverySubsidy,
+    });
+
     const couponDiscountAmount = round(settlement.platformDiscountUsed || 0);
 
     const gstTotalForOrder = round(settlement.gstOnFood + settlement.packagingGST + settlement.deliveryGST + settlement.platformGST);

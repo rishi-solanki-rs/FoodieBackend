@@ -13,6 +13,7 @@
 'use strict';
 
 const mongoose    = require('mongoose');
+const PDFDocument = require('pdfkit');
 const Order       = require('../models/Order');
 const AdminSetting = require('../models/AdminSetting');
 const CustomerBill = require('../models/CustomerBill');
@@ -25,6 +26,34 @@ const r2 = (n) => {
   const numeric = Number(n);
   if (!Number.isFinite(numeric)) return 0;
   return Number(numeric.toFixed(5));
+};
+
+const nearlyEqual = (a, b, tolerance = 0.00005) => Math.abs(r2(a) - r2(b)) <= tolerance;
+
+const toObjectIdString = (value) => {
+  if (!value) return null;
+  if (typeof value === 'string') return value;
+  if (value._id) return String(value._id);
+  return String(value);
+};
+
+const splitHalf = (value) => {
+  const total = r2(value);
+  const cgst = r2(total / 2);
+  const sgst = r2(total - cgst);
+  return { total, cgst, sgst };
+};
+
+const formatAmount = (value) => {
+  const rounded = r2(value);
+  const two = Number(rounded.toFixed(2));
+  if (nearlyEqual(rounded, two, 0.00001)) return two.toFixed(2);
+  return rounded.toFixed(5).replace(/\.?0+$/, '');
+};
+
+const normalizeItemName = (item) => {
+  if (typeof item?.name === 'string') return item.name;
+  return item?.name?.en || item?.name?.de || item?.name?.ar || 'Item';
 };
 
 /**
@@ -54,6 +83,409 @@ async function loadGstRates() {
   };
 }
 
+function buildBillingDataFromOrder(orderLike) {
+  const order = orderLike || {};
+  const pb = order.paymentBreakdown || {};
+  const rider = order.riderEarnings || {};
+
+  const items = Array.isArray(order.items)
+    ? order.items.map((item) => ({
+        name: normalizeItemName(item),
+        qty: Number(item?.quantity || 0),
+        rate: r2(item?.price ?? 0),
+        total: r2(item?.lineTotal ?? ((Number(item?.price || 0)) * (Number(item?.quantity || 0)))),
+      }))
+    : [];
+
+  const itemsTotal = r2(pb.itemTotal ?? order.itemTotal ?? items.reduce((sum, item) => sum + item.total, 0));
+  const restaurantDiscount = r2(pb.restaurantDiscount ?? 0);
+  const taxableFood = r2(pb.priceAfterRestaurantDiscount ?? pb.taxableAmountFood ?? Math.max(0, itemsTotal - restaurantDiscount));
+  const foodGst = r2(pb.gstOnFood ?? 0);
+  const foodSplit = {
+    total: foodGst,
+    cgst: r2(pb.cgstOnFood ?? (foodGst / 2)),
+    sgst: r2(pb.sgstOnFood ?? (foodGst - (pb.cgstOnFood ?? (foodGst / 2)))),
+    percent: r2(pb.gstPercentOnFood ?? (taxableFood > 0 ? (foodGst / taxableFood) * 100 : 0)),
+  };
+
+  const packagingCharge = r2(pb.packagingCharge ?? order.packaging ?? 0);
+  const packagingGst = r2(pb.packagingGST ?? 0);
+  const packagingSplit = {
+    total: packagingGst,
+    cgst: r2(pb.cgstOnPackaging ?? (packagingGst / 2)),
+    sgst: r2(pb.sgstOnPackaging ?? (packagingGst - (pb.cgstOnPackaging ?? (packagingGst / 2)))),
+    percent: r2(pb.gstPercentOnPackaging ?? (packagingCharge > 0 ? (packagingGst / packagingCharge) * 100 : 0)),
+  };
+
+  const couponCode = order.couponCode || null;
+  const couponType = order.couponType || pb.couponType || null;
+  const couponDiscount = r2(pb.couponDiscountAmount ?? pb.foodierDiscount ?? order.discount ?? 0);
+
+  const deliveryOriginalCharge = r2(pb.deliveryFee ?? pb.deliveryCharge ?? order.deliveryFee ?? 0);
+  const deliveryDiscountApplied = r2(pb.deliveryDiscountUsed ?? 0);
+  const deliveryFinalCharge = r2(pb.deliveryFeeAfterDiscount ?? Math.max(0, deliveryOriginalCharge - deliveryDiscountApplied));
+  const deliveryGst = r2(pb.deliveryGST ?? 0);
+  const deliverySplit = {
+    total: deliveryGst,
+    cgst: r2(pb.cgstDelivery ?? (deliveryGst / 2)),
+    sgst: r2(pb.sgstDelivery ?? (deliveryGst - (pb.cgstDelivery ?? (deliveryGst / 2)))),
+    percent: r2(pb.deliveryChargeGstPercent ?? 0),
+  };
+
+  const platformOriginalAmount = r2(pb.platformFee ?? order.platformFee ?? 0);
+  const platformDiscountApplied = r2(pb.platformDiscountSplit ?? Math.max(0, (pb.platformDiscountUsed ?? 0) - deliveryDiscountApplied));
+  const platformFinalAmount = r2(pb.platformFeeAfterDiscount ?? Math.max(0, platformOriginalAmount - platformDiscountApplied));
+  const platformGst = r2(pb.platformGST ?? 0);
+  const platformSplit = {
+    total: platformGst,
+    cgst: r2(pb.cgstPlatform ?? (platformGst / 2)),
+    sgst: r2(pb.sgstPlatform ?? (platformGst - (pb.cgstPlatform ?? (platformGst / 2)))),
+    percent: r2(pb.gstPercentOnPlatform ?? 0),
+  };
+
+  const adminDeliverySubsidy = r2(pb.adminDeliverySubsidy ?? deliveryDiscountApplied);
+  const smallCartFee = r2(pb.smallCartFee ?? 0);
+  const tip = r2(order.tip ?? rider.tip ?? 0);
+
+  const commissionAmount = r2(pb.adminCommissionAmount ?? ((pb.totalAdminCommissionDeduction ?? 0) - (pb.adminCommissionGst ?? 0)));
+  const commissionGst = r2(pb.adminCommissionGst ?? 0);
+  const commissionSplit = {
+    total: commissionGst,
+    cgst: r2(pb.cgstAdminCommission ?? (commissionGst / 2)),
+    sgst: r2(pb.sgstAdminCommission ?? (commissionGst - (pb.cgstAdminCommission ?? (commissionGst / 2)))),
+    percent: r2(pb.adminCommissionGstPercent ?? 0),
+  };
+  const commissionBase = r2(pb.priceAfterRestaurantDiscount ?? pb.taxableAmountFood ?? Math.max(0, itemsTotal - restaurantDiscount));
+  const commissionPercent = r2(commissionBase > 0 ? ((commissionAmount / commissionBase) * 100) : 0);
+
+  const restaurantGross = r2(pb.restaurantGross ?? (taxableFood + packagingCharge));
+  const restaurantNetEarning = r2(pb.restaurantNet ?? pb.restaurantNetEarning ?? 0);
+  const customerRestaurantBill = r2(pb.customerRestaurantBill ?? pb.finalPayableToRestaurant ?? pb.restaurantBillTotal ?? (taxableFood + foodGst + packagingCharge + packagingGst));
+
+  const riderDeliveryCharge = r2(rider.deliveryCharge ?? 0);
+  const riderPlatformFeeShare = r2(rider.platformFee ?? 0);
+  const riderIncentive = r2(rider.incentive ?? 0);
+  const riderTip = r2(rider.tip ?? order.tip ?? 0);
+  const riderIncentivePercent = r2(rider.incentivePercentAtCompletion ?? 0);
+  const riderTotalEarning = r2(rider.totalRiderEarning ?? (riderDeliveryCharge + riderPlatformFeeShare + riderIncentive + riderTip));
+
+  const gstSummary = {
+    foodGst: foodGst,
+    packagingGst,
+    deliveryGst,
+    platformGst,
+    commissionGst,
+    cgstTotal: r2(pb.totalGstBreakdownForAdmin?.cgstTotal ?? (foodSplit.cgst + packagingSplit.cgst + deliverySplit.cgst + platformSplit.cgst + commissionSplit.cgst)),
+    sgstTotal: r2(pb.totalGstBreakdownForAdmin?.sgstTotal ?? (foodSplit.sgst + packagingSplit.sgst + deliverySplit.sgst + platformSplit.sgst + commissionSplit.sgst)),
+    totalGst: r2(pb.totalGstCollected ?? (foodGst + packagingGst + deliveryGst + platformGst + commissionGst)),
+  };
+
+  const customerBill = {
+    items,
+    itemsTotal,
+    restaurantDiscount,
+    subTotal: taxableFood,
+    gstOnFood: foodSplit,
+    packaging: {
+      charge: packagingCharge,
+      gst: packagingGst,
+      cgst: packagingSplit.cgst,
+      sgst: packagingSplit.sgst,
+      total: r2(packagingCharge + packagingGst),
+    },
+    platformFee: {
+      amount: platformOriginalAmount,
+      discountApplied: platformDiscountApplied,
+      finalAmount: platformFinalAmount,
+      gst: platformGst,
+      cgst: platformSplit.cgst,
+      sgst: platformSplit.sgst,
+      total: r2(platformFinalAmount + platformGst),
+    },
+    delivery: {
+      originalCharge: deliveryOriginalCharge,
+      discountApplied: deliveryDiscountApplied,
+      finalCharge: deliveryFinalCharge,
+      gst: deliveryGst,
+      cgst: deliverySplit.cgst,
+      sgst: deliverySplit.sgst,
+      total: r2(deliveryFinalCharge + deliveryGst),
+      adminDeliverySubsidy,
+    },
+    couponDiscount,
+    couponCode,
+    couponType,
+    smallCartFee,
+    tip,
+    paymentMethod: order.paymentMethod || null,
+    paymentStatus: order.paymentStatus || null,
+    finalPayableAmount: r2(order.totalAmount ?? 0),
+  };
+
+  const restaurantBill = {
+    itemsTotal,
+    restaurantDiscount,
+    packaging: packagingCharge,
+    restaurantGross,
+    gst: {
+      foodGst,
+      foodCgst: foodSplit.cgst,
+      foodSgst: foodSplit.sgst,
+      packagingGst,
+      packagingCgst: packagingSplit.cgst,
+      packagingSgst: packagingSplit.sgst,
+    },
+    commission: {
+      commissionPercent,
+      commissionAmount,
+      commissionGst,
+      cgstOnCommission: commissionSplit.cgst,
+      sgstOnCommission: commissionSplit.sgst,
+    },
+    restaurantNetEarning,
+  };
+
+  const riderBill = {
+    deliveryCharge: riderDeliveryCharge,
+    platformFeeShare: riderPlatformFeeShare,
+    incentive: riderIncentive,
+    tip: riderTip,
+    incentivePercent: riderIncentivePercent,
+    totalRiderEarning: riderTotalEarning,
+  };
+
+  const expectedFinalPayable = r2(customerRestaurantBill + customerBill.platformFee.total + customerBill.delivery.total + smallCartFee + tip);
+  const validationIssues = [];
+
+  if (deliveryFinalCharge === 0 && deliveryGst !== 0) {
+    validationIssues.push('delivery GST must be zero when final delivery charge is zero');
+  }
+  if (platformFinalAmount === 0 && platformGst !== 0) {
+    validationIssues.push('platform GST must be zero when final platform fee is zero');
+  }
+  if (couponType === 'free_delivery') {
+    if (!nearlyEqual(deliveryFinalCharge, 0)) validationIssues.push('free_delivery coupon should zero customer delivery charge');
+    if (!nearlyEqual(deliveryDiscountApplied, deliveryOriginalCharge)) validationIssues.push('free_delivery coupon should discount full original delivery charge');
+    if (!nearlyEqual(adminDeliverySubsidy, deliveryOriginalCharge)) validationIssues.push('adminDeliverySubsidy should equal original delivery charge for free_delivery');
+  }
+  if (!nearlyEqual(gstSummary.totalGst, gstSummary.foodGst + gstSummary.packagingGst + gstSummary.deliveryGst + gstSummary.platformGst + gstSummary.commissionGst)) {
+    validationIssues.push('GST summary total mismatch');
+  }
+  if (!nearlyEqual(riderTotalEarning, riderDeliveryCharge + riderPlatformFeeShare + riderIncentive + riderTip)) {
+    validationIssues.push('rider total earning mismatch');
+  }
+  if (!nearlyEqual(customerBill.finalPayableAmount, expectedFinalPayable)) {
+    validationIssues.push('final payable amount mismatch against billing breakdown');
+  }
+
+  return {
+    orderMeta: {
+      orderId: toObjectIdString(order._id),
+      status: order.status || null,
+      createdAt: order.createdAt || null,
+      paymentMethod: order.paymentMethod || null,
+      paymentStatus: order.paymentStatus || null,
+      couponCode,
+      couponType,
+      customerId: toObjectIdString(order.customer),
+      restaurantId: toObjectIdString(order.restaurant),
+      riderId: toObjectIdString(order.rider),
+    },
+    customerBill,
+    restaurantBill,
+    riderBill,
+    gstSummary,
+    validation: {
+      isValid: validationIssues.length === 0,
+      issues: validationIssues,
+    },
+  };
+}
+
+function validateBillingData(billing) {
+  const issues = Array.isArray(billing?.validation?.issues) ? billing.validation.issues : [];
+  return {
+    isValid: issues.length === 0,
+    issues,
+  };
+}
+
+function ensureSpace(doc, requiredHeight = 24) {
+  if (doc.y + requiredHeight > doc.page.height - doc.page.margins.bottom) {
+    doc.addPage();
+  }
+}
+
+function drawTable(doc, title, columns, rows) {
+  ensureSpace(doc, 40);
+  doc.moveDown(0.5);
+  doc.font('Helvetica-Bold').fontSize(13).text(title);
+  doc.moveDown(0.3);
+
+  const startX = doc.page.margins.left;
+  let currentX = startX;
+  const headerY = doc.y;
+
+  doc.font('Helvetica-Bold').fontSize(10);
+  columns.forEach((column) => {
+    doc.text(column.label, currentX, headerY, {
+      width: column.width,
+      align: column.align || 'left',
+    });
+    currentX += column.width;
+  });
+
+  doc.moveTo(startX, headerY + 14).lineTo(startX + columns.reduce((sum, column) => sum + column.width, 0), headerY + 14).stroke('#CCCCCC');
+  doc.y = headerY + 18;
+  doc.font('Helvetica').fontSize(9.5);
+
+  rows.forEach((row) => {
+    ensureSpace(doc, 18);
+    currentX = startX;
+    const rowY = doc.y;
+    columns.forEach((column, index) => {
+      doc.text(String(row[index] ?? ''), currentX, rowY, {
+        width: column.width,
+        align: column.align || 'left',
+      });
+      currentX += column.width;
+    });
+    doc.y = rowY + 16;
+  });
+}
+
+function createPdfBuffer(docBuilder) {
+  return new Promise((resolve, reject) => {
+    const doc = new PDFDocument({ margin: 40, size: 'A4' });
+    const chunks = [];
+    doc.on('data', (chunk) => chunks.push(chunk));
+    doc.on('end', () => resolve(Buffer.concat(chunks)));
+    doc.on('error', reject);
+    docBuilder(doc);
+    doc.end();
+  });
+}
+
+async function generateInvoicePdfBuffer(order, billing) {
+  return createPdfBuffer((doc) => {
+    const customer = order?.customer || {};
+    const restaurant = order?.restaurant || {};
+    const rider = order?.rider || {};
+    const riderUser = rider?.user || {};
+
+    doc.font('Helvetica-Bold').fontSize(18).text('Order Invoice', { align: 'center' });
+    doc.moveDown(0.6);
+    doc.font('Helvetica').fontSize(10);
+    doc.text(`Order ID: ${billing.orderMeta.orderId || ''}`);
+    doc.text(`Status: ${billing.orderMeta.status || ''}`);
+    doc.text(`Created At: ${billing.orderMeta.createdAt ? new Date(billing.orderMeta.createdAt).toISOString() : ''}`);
+    doc.text(`Customer: ${customer?.name || customer?.firstName || billing.orderMeta.customerId || ''}`);
+    doc.text(`Restaurant: ${restaurant?.name?.en || restaurant?.name || billing.orderMeta.restaurantId || ''}`);
+    if (billing.orderMeta.riderId) {
+      doc.text(`Rider: ${riderUser?.name || rider?.name || billing.orderMeta.riderId}`);
+    }
+
+    drawTable(
+      doc,
+      'Customer Bill',
+      [
+        { label: 'Description', width: 220 },
+        { label: 'Amount', width: 90, align: 'right' },
+        { label: 'GST', width: 90, align: 'right' },
+        { label: 'Total', width: 90, align: 'right' },
+      ],
+      [
+        ...billing.customerBill.items.map((item) => [
+          `${item.name} x ${item.qty}`,
+          formatAmount(item.rate),
+          '-',
+          formatAmount(item.total),
+        ]),
+        ['Items Total', formatAmount(billing.customerBill.itemsTotal), '-', formatAmount(billing.customerBill.itemsTotal)],
+        ['Restaurant Discount', formatAmount(-billing.customerBill.restaurantDiscount), '-', formatAmount(-billing.customerBill.restaurantDiscount)],
+        ['Sub Total', formatAmount(billing.customerBill.subTotal), '-', formatAmount(billing.customerBill.subTotal)],
+        ['Food GST', formatAmount(billing.customerBill.gstOnFood.cgst), formatAmount(billing.customerBill.gstOnFood.total), formatAmount(billing.customerBill.gstOnFood.total)],
+        ['Packaging', formatAmount(billing.customerBill.packaging.charge), formatAmount(billing.customerBill.packaging.gst), formatAmount(billing.customerBill.packaging.total)],
+        ['Platform Fee', formatAmount(billing.customerBill.platformFee.finalAmount), formatAmount(billing.customerBill.platformFee.gst), formatAmount(billing.customerBill.platformFee.total)],
+        ['Delivery', formatAmount(billing.customerBill.delivery.finalCharge), formatAmount(billing.customerBill.delivery.gst), formatAmount(billing.customerBill.delivery.total)],
+        ['Coupon Discount', formatAmount(-billing.customerBill.couponDiscount), '-', formatAmount(-billing.customerBill.couponDiscount)],
+        ['Tip', formatAmount(billing.customerBill.tip), '-', formatAmount(billing.customerBill.tip)],
+        ['Small Cart Fee', formatAmount(billing.customerBill.smallCartFee), '-', formatAmount(billing.customerBill.smallCartFee)],
+        ['Final Payable Amount', formatAmount(billing.customerBill.finalPayableAmount), '-', formatAmount(billing.customerBill.finalPayableAmount)],
+      ],
+    );
+
+    drawTable(
+      doc,
+      'Restaurant Bill',
+      [
+        { label: 'Description', width: 220 },
+        { label: 'Amount', width: 90, align: 'right' },
+        { label: 'GST', width: 90, align: 'right' },
+        { label: 'Total', width: 90, align: 'right' },
+      ],
+      [
+        ['Items Total', formatAmount(billing.restaurantBill.itemsTotal), '-', formatAmount(billing.restaurantBill.itemsTotal)],
+        ['Restaurant Discount', formatAmount(-billing.restaurantBill.restaurantDiscount), '-', formatAmount(-billing.restaurantBill.restaurantDiscount)],
+        ['Packaging', formatAmount(billing.restaurantBill.packaging), formatAmount(billing.restaurantBill.gst.packagingGst), formatAmount(billing.restaurantBill.packaging + billing.restaurantBill.gst.packagingGst)],
+        ['Restaurant Gross', formatAmount(billing.restaurantBill.restaurantGross), '-', formatAmount(billing.restaurantBill.restaurantGross)],
+        ['Food GST', formatAmount(billing.restaurantBill.gst.foodCgst), formatAmount(billing.restaurantBill.gst.foodGst), formatAmount(billing.restaurantBill.gst.foodGst)],
+        ['Commission', formatAmount(billing.restaurantBill.commission.commissionAmount), formatAmount(billing.restaurantBill.commission.commissionGst), formatAmount(billing.restaurantBill.commission.commissionAmount + billing.restaurantBill.commission.commissionGst)],
+        ['Restaurant Net Earnings', formatAmount(billing.restaurantBill.restaurantNetEarning), '-', formatAmount(billing.restaurantBill.restaurantNetEarning)],
+      ],
+    );
+
+    drawTable(
+      doc,
+      'Rider Bill',
+      [
+        { label: 'Description', width: 220 },
+        { label: 'Amount', width: 90, align: 'right' },
+        { label: 'GST', width: 90, align: 'right' },
+        { label: 'Total', width: 90, align: 'right' },
+      ],
+      [
+        ['Delivery Charge', formatAmount(billing.riderBill.deliveryCharge), '-', formatAmount(billing.riderBill.deliveryCharge)],
+        ['Platform Fee Share', formatAmount(billing.riderBill.platformFeeShare), '-', formatAmount(billing.riderBill.platformFeeShare)],
+        ['Incentive', formatAmount(billing.riderBill.incentive), '-', formatAmount(billing.riderBill.incentive)],
+        ['Tip', formatAmount(billing.riderBill.tip), '-', formatAmount(billing.riderBill.tip)],
+        ['Total Rider Earning', formatAmount(billing.riderBill.totalRiderEarning), '-', formatAmount(billing.riderBill.totalRiderEarning)],
+      ],
+    );
+
+    drawTable(
+      doc,
+      'GST Summary',
+      [
+        { label: 'Description', width: 220 },
+        { label: 'Amount', width: 90, align: 'right' },
+        { label: 'GST', width: 90, align: 'right' },
+        { label: 'Total', width: 90, align: 'right' },
+      ],
+      [
+        ['Food GST', '-', formatAmount(billing.gstSummary.foodGst), formatAmount(billing.gstSummary.foodGst)],
+        ['Packaging GST', '-', formatAmount(billing.gstSummary.packagingGst), formatAmount(billing.gstSummary.packagingGst)],
+        ['Delivery GST', '-', formatAmount(billing.gstSummary.deliveryGst), formatAmount(billing.gstSummary.deliveryGst)],
+        ['Platform GST', '-', formatAmount(billing.gstSummary.platformGst), formatAmount(billing.gstSummary.platformGst)],
+        ['Commission GST', '-', formatAmount(billing.gstSummary.commissionGst), formatAmount(billing.gstSummary.commissionGst)],
+        ['CGST Total', '-', formatAmount(billing.gstSummary.cgstTotal), formatAmount(billing.gstSummary.cgstTotal)],
+        ['SGST Total', '-', formatAmount(billing.gstSummary.sgstTotal), formatAmount(billing.gstSummary.sgstTotal)],
+        ['Total GST', '-', formatAmount(billing.gstSummary.totalGst), formatAmount(billing.gstSummary.totalGst)],
+      ],
+    );
+
+    if (!billing.validation.isValid) {
+      ensureSpace(doc, 50);
+      doc.moveDown(0.6);
+      doc.font('Helvetica-Bold').fontSize(12).fillColor('#B00020').text('Validation Notes');
+      doc.fillColor('#000000').font('Helvetica').fontSize(10);
+      billing.validation.issues.forEach((issue) => {
+        doc.text(`- ${issue}`);
+      });
+    }
+  });
+}
+
 // ─── Main export ──────────────────────────────────────────────────────────────
 
 /**
@@ -73,110 +505,7 @@ async function generateBills(orderId) {
   // ── 2. Load the full order ─────────────────────────────────────────────────
   const order = await Order.findById(orderId).lean();
   if (!order) throw new Error(`billingService: Order ${orderId} not found`);
-
-  const gstRates = await loadGstRates();
-
-  const pb = order.paymentBreakdown || {};
-
-  // Raw amounts from order (set at order-creation time by priceCalculator)
-  const itemsTotal         = r2(pb.itemTotal           ?? order.itemTotal     ?? 0);
-  const priceAfterRestaurantDiscount = r2(pb.priceAfterRestaurantDiscount ?? pb.taxableAmountFood ?? (itemsTotal - (pb.restaurantDiscount ?? 0)));
-  const restaurantDiscount = r2(pb.restaurantDiscount  ?? 0);
-  const platformDiscount   = r2(pb.foodierDiscount     ?? order.discount      ?? 0);
-  const discountTotal      = r2(restaurantDiscount + platformDiscount);
-  const rawGstOnFood       = r2(pb.gstOnFood           ?? 0);
-  const packagingCharge    = r2(pb.packagingCharge      ?? order.packaging    ?? 0);
-  const rawPackagingGst    = r2(pb.packagingGST         ?? 0);
-  const platformFee        = r2(pb.platformFee ?? order.platformFee ?? 0);
-  const deliveryCharge     = r2(order.deliveryFee       ?? 0);
-  const tip                = r2(order.tip               ?? 0);
-
-  // Settled commission / earnings from canonical paymentBreakdown
-  const adminCommissionAmount  = r2(
-    (pb.totalAdminCommissionDeduction ?? 0) - (pb.adminCommissionGst ?? 0),
-  );
-  const adminCommissionPercent = (() => {
-    if (Number.isFinite(Number(adminCommissionAmount)) && priceAfterRestaurantDiscount > 0) {
-      // Back-calculate or use the stored item-level first commission percent
-      const sumItemPercent = Array.isArray(order.items)
-        ? order.items.reduce((s, i) => s + (Number(i.commissionPercent) || 0), 0)
-        : 0;
-      if (sumItemPercent > 0) {
-        return r2(sumItemPercent / Math.max(order.items?.length || 1, 1));
-      }
-      return r2((adminCommissionAmount / priceAfterRestaurantDiscount) * 100);
-    }
-    return 0;
-  })();
-  const restaurantNetEarning   = r2(pb.restaurantNet ?? 0);
-  const riderDeliveryCharge    = r2(order.riderEarnings?.deliveryCharge ?? 0);
-  const riderPlatformFeeCredit = r2(order.riderEarnings?.platformFee ?? 0);
-  const riderIncentive         = r2(order.riderEarnings?.incentive ?? 0);
-  const riderIncentivePct      = r2(order.riderEarnings?.incentivePercentAtCompletion ?? 0);
-  const riderTotalEarning      = r2(order.riderEarnings?.totalRiderEarning ?? 0);
-
-  // ── 3. Compute GST breakdowns ──────────────────────────────────────────────
-
-  // Food GST: use stored value and split CGST/SGST
-  const gstOnFood = {
-    percent: rawGstOnFood > 0 && priceAfterRestaurantDiscount > 0
-      ? r2((rawGstOnFood / priceAfterRestaurantDiscount) * 100)
-      : 0,
-    base:  priceAfterRestaurantDiscount,
-    total: rawGstOnFood,
-    cgst:  r2(rawGstOnFood / 2),
-    sgst:  r2(rawGstOnFood / 2),
-  };
-
-  // Packaging GST
-  const gstOnPackaging = {
-    percent: rawPackagingGst > 0 && packagingCharge > 0
-      ? r2((rawPackagingGst / packagingCharge) * 100)
-      : 0,
-    base:  packagingCharge,
-    total: rawPackagingGst,
-    cgst:  r2(rawPackagingGst / 2),
-    sgst:  r2(rawPackagingGst / 2),
-  };
-
-  const platformGstTotal = r2(pb.platformGST ?? 0);
-  const deliveryGstTotal = r2(pb.deliveryGST ?? (deliveryCharge * ((pb.deliveryChargeGstPercent ?? gstRates.deliveryChargeGstPercent) / 100)));
-
-  // Platform fee GST (18% by default, admin-configurable)
-  const gstOnPlatform = {
-    percent: r2(pb.gstPercentOnPlatform ?? gstRates.platformFeeGstPercent),
-    base: r2(pb.platformFee ?? platformFee),
-    total: platformGstTotal,
-    cgst: r2(pb.cgstPlatform ?? (platformGstTotal / 2)),
-    sgst: r2(pb.sgstPlatform ?? (platformGstTotal / 2)),
-  };
-
-  // Delivery charge GST (18% by default, admin-configurable)
-  const gstOnDelivery = {
-    percent: r2(pb.deliveryChargeGstPercent ?? gstRates.deliveryChargeGstPercent),
-    base: r2(deliveryCharge),
-    total: deliveryGstTotal,
-    cgst: r2(pb.cgstDelivery ?? (deliveryGstTotal / 2)),
-    sgst: r2(pb.sgstDelivery ?? (deliveryGstTotal / 2)),
-  };
-
-  // Admin commission GST (18%, the platform charges this to the restaurant)
-  const gstOnAdminCommission = makeGstBlock(adminCommissionAmount, gstRates.adminCommissionGstPercent);
-
-  // Total GST for customer bill
-  const totalGstAmount = r2(
-    gstOnFood.total +
-    gstOnPackaging.total +
-    gstOnPlatform.total +
-    gstOnDelivery.total,
-  );
-  const totalGst = {
-    cgst:  r2(totalGstAmount / 2),
-    sgst:  r2(totalGstAmount / 2),
-    total: totalGstAmount,
-  };
-
-  const finalPayableAmount = r2(order.totalAmount ?? 0);
+  const billing = buildBillingDataFromOrder(order);
 
   // ── 4. Create bills ────────────────────────────────────────────────────────
   const billPromises = [];
@@ -187,20 +516,48 @@ async function generateBills(orderId) {
       order:              order._id,
       customer:           order.customer,
       restaurant:         order.restaurant,
-      itemsTotal,
-      restaurantDiscount,
-      platformDiscount,
-      discountTotal,
-      gstOnFood,
-      packagingCharge,
-      gstOnPackaging,
-      platformFee,
-      gstOnPlatform,
-      deliveryCharge,
-      gstOnDelivery,
-      tip,
-      totalGst,
-      finalPayableAmount,
+      itemsTotal:         billing.customerBill.itemsTotal,
+      restaurantDiscount: billing.customerBill.restaurantDiscount,
+      platformDiscount:   billing.customerBill.couponDiscount,
+      discountTotal:      r2(billing.customerBill.restaurantDiscount + billing.customerBill.couponDiscount),
+      gstOnFood:          {
+        percent: billing.customerBill.gstOnFood.percent,
+        base: billing.customerBill.subTotal,
+        total: billing.customerBill.gstOnFood.total,
+        cgst: billing.customerBill.gstOnFood.cgst,
+        sgst: billing.customerBill.gstOnFood.sgst,
+      },
+      packagingCharge:    billing.customerBill.packaging.charge,
+      gstOnPackaging:     {
+        percent: r2(billing.customerBill.packaging.charge > 0 ? (billing.customerBill.packaging.gst / billing.customerBill.packaging.charge) * 100 : 0),
+        base: billing.customerBill.packaging.charge,
+        total: billing.customerBill.packaging.gst,
+        cgst: billing.customerBill.packaging.cgst,
+        sgst: billing.customerBill.packaging.sgst,
+      },
+      platformFee:        billing.customerBill.platformFee.finalAmount,
+      gstOnPlatform:      {
+        percent: r2(billing.customerBill.platformFee.finalAmount > 0 ? (billing.customerBill.platformFee.gst / billing.customerBill.platformFee.finalAmount) * 100 : 0),
+        base: billing.customerBill.platformFee.finalAmount,
+        total: billing.customerBill.platformFee.gst,
+        cgst: billing.customerBill.platformFee.cgst,
+        sgst: billing.customerBill.platformFee.sgst,
+      },
+      deliveryCharge:     billing.customerBill.delivery.finalCharge,
+      gstOnDelivery:      {
+        percent: r2(billing.customerBill.delivery.finalCharge > 0 ? (billing.customerBill.delivery.gst / billing.customerBill.delivery.finalCharge) * 100 : 0),
+        base: billing.customerBill.delivery.finalCharge,
+        total: billing.customerBill.delivery.gst,
+        cgst: billing.customerBill.delivery.cgst,
+        sgst: billing.customerBill.delivery.sgst,
+      },
+      tip:                billing.customerBill.tip,
+      totalGst:           {
+        cgst: billing.gstSummary.cgstTotal - splitHalf(billing.gstSummary.commissionGst).cgst,
+        sgst: billing.gstSummary.sgstTotal - splitHalf(billing.gstSummary.commissionGst).sgst,
+        total: billing.gstSummary.totalGst - billing.gstSummary.commissionGst,
+      },
+      finalPayableAmount: billing.customerBill.finalPayableAmount,
       paymentMethod: order.paymentMethod,
       paymentStatus: order.paymentStatus,
       couponCode:    order.couponCode || null,
@@ -214,15 +571,33 @@ async function generateBills(orderId) {
       order:                  order._id,
       restaurant:             order.restaurant,
       customer:               order.customer,
-      itemsTotal,
-      gstOnFood,
-      restaurantDiscount,
-      packagingCharge,
-      gstOnPackaging,
-      adminCommissionPercent,
-      adminCommissionAmount,
-      gstOnAdminCommission,
-      restaurantNetEarning,
+      itemsTotal:             billing.restaurantBill.itemsTotal,
+      gstOnFood:              {
+        percent: billing.customerBill.gstOnFood.percent,
+        base: billing.customerBill.subTotal,
+        total: billing.restaurantBill.gst.foodGst,
+        cgst: billing.restaurantBill.gst.foodCgst,
+        sgst: billing.restaurantBill.gst.foodSgst,
+      },
+      restaurantDiscount:     billing.restaurantBill.restaurantDiscount,
+      packagingCharge:        billing.restaurantBill.packaging,
+      gstOnPackaging:         {
+        percent: r2(billing.restaurantBill.packaging > 0 ? (billing.restaurantBill.gst.packagingGst / billing.restaurantBill.packaging) * 100 : 0),
+        base: billing.restaurantBill.packaging,
+        total: billing.restaurantBill.gst.packagingGst,
+        cgst: billing.restaurantBill.gst.packagingCgst,
+        sgst: billing.restaurantBill.gst.packagingSgst,
+      },
+      adminCommissionPercent: billing.restaurantBill.commission.commissionPercent,
+      adminCommissionAmount:  billing.restaurantBill.commission.commissionAmount,
+      gstOnAdminCommission:   {
+        percent: billing.restaurantBill.commission.commissionAmount > 0 ? r2((billing.restaurantBill.commission.commissionGst / billing.restaurantBill.commission.commissionAmount) * 100) : 0,
+        base: billing.restaurantBill.commission.commissionAmount,
+        total: billing.restaurantBill.commission.commissionGst,
+        cgst: billing.restaurantBill.commission.cgstOnCommission,
+        sgst: billing.restaurantBill.commission.sgstOnCommission,
+      },
+      restaurantNetEarning:   billing.restaurantBill.restaurantNetEarning,
       generatedAt: new Date(),
     }),
   );
@@ -235,12 +610,12 @@ async function generateBills(orderId) {
         rider:              order.rider,
         restaurant:         order.restaurant,
         customer:           order.customer,
-        deliveryCharge:     Math.max(0, riderDeliveryCharge),
-        platformFeeCredit:  Math.max(0, riderPlatformFeeCredit),
-        incentive:          riderIncentive,
-        incentivePercent:   riderIncentivePct,
-        tip,
-        riderTotalEarning:  r2(riderTotalEarning),
+        deliveryCharge:     Math.max(0, billing.riderBill.deliveryCharge),
+        platformFeeCredit:  Math.max(0, billing.riderBill.platformFeeShare),
+        incentive:          billing.riderBill.incentive,
+        incentivePercent:   billing.riderBill.incentivePercent,
+        tip:                billing.riderBill.tip,
+        riderTotalEarning:  r2(billing.riderBill.totalRiderEarning),
         paymentMethod:      order.paymentMethod,
         generatedAt:        new Date(),
       }),
@@ -257,4 +632,9 @@ async function generateBills(orderId) {
   };
 }
 
-module.exports = { generateBills };
+module.exports = {
+  generateBills,
+  buildBillingDataFromOrder,
+  validateBillingData,
+  generateInvoicePdfBuffer,
+};

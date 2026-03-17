@@ -28,6 +28,7 @@ const { calculateSettlementBreakdown } = require('../services/settlementCalculat
 const { validateOrderFinancialIntegrity } = require('../services/financialIntegrityService');
 const { processSettlement } = require('../services/settlementService');
 const { computeDeliveryFee, getAdminSettings } = require('../services/priceCalculator');
+const { buildBillingDataFromOrder, validateBillingData, generateInvoicePdfBuffer } = require('../services/billingService');
 const {
   logger,
   logOrderTransition,
@@ -3262,165 +3263,42 @@ const splitGst = (value) => {
 };
 
 const buildBillingSectionsFromOrder = (orderLike) => {
-  const order = orderLike || {};
-  const pb = order.paymentBreakdown || {};
-  const rider = order.riderEarnings || {};
+  return buildBillingDataFromOrder(orderLike);
+};
 
-  const itemsTotal = asAmount(pb.itemTotal ?? order.itemTotal ?? 0);
-  const restaurantDiscount = asAmount(pb.restaurantDiscount ?? 0);
-  const platformDiscount = asAmount(pb.foodierDiscount ?? order.discount ?? 0);
-  const subTotal = asAmount(Math.max(0, itemsTotal - restaurantDiscount));
+const canAccessOrderBilling = async (req, order) => {
+  if (!req.user || !isValidObjectId(req.user._id)) {
+    return { allowed: false, status: 401, message: 'Unauthorized' };
+  }
 
-  const gstOnFood = asAmount(pb.gstOnFood ?? 0);
-  const cgstFood = asAmount(pb.cgstOnFood ?? (gstOnFood / 2));
-  const sgstFood = asAmount(pb.sgstOnFood ?? (gstOnFood - cgstFood));
-  const packagingCharge = asAmount(pb.packagingCharge ?? order.packaging ?? 0);
-  const packagingGst = asAmount(pb.packagingGST ?? 0);
-  const deliveryFee = asAmount(pb.deliveryCharge ?? order.deliveryFee ?? 0);
-  const deliveryGST = asAmount(pb.deliveryGST ?? 0);
-  const cgstDelivery = asAmount(pb.cgstDelivery ?? (deliveryGST / 2));
-  const sgstDelivery = asAmount(pb.sgstDelivery ?? (deliveryGST - cgstDelivery));
-  const platformFee = asAmount(order.platformFee ?? pb.platformFee ?? 0);
-  const platformGST = asAmount(pb.platformGST ?? 0);
-  const tip = asAmount(order.tip ?? 0);
+  const role = req.user.role;
+  const orderCustomerId = order.customer?._id ? order.customer._id.toString() : order.customer?.toString();
+  const orderRestaurantId = order.restaurant?._id ? order.restaurant._id.toString() : order.restaurant?.toString();
+  const orderRiderId = order.rider?._id ? order.rider._id.toString() : order.rider?.toString();
+  if (role === 'admin') {
+    return { allowed: true };
+  }
+  if (role === 'customer') {
+    return orderCustomerId === req.user._id.toString()
+      ? { allowed: true }
+      : { allowed: false, status: 403, message: 'Access denied' };
+  }
+  if (role === 'restaurant_owner') {
+    const restaurant = await Restaurant.findOne({ owner: req.user._id }).select('_id').lean();
+    if (!restaurant) return { allowed: false, status: 404, message: 'Restaurant not found' };
+    return orderRestaurantId === restaurant._id.toString()
+      ? { allowed: true }
+      : { allowed: false, status: 403, message: 'Access denied' };
+  }
+  if (role === 'rider') {
+    const riderProfile = await Rider.findOne({ user: req.user._id }).select('_id').lean();
+    if (!riderProfile) return { allowed: false, status: 404, message: 'Rider profile not found' };
+    return orderRiderId === riderProfile._id.toString()
+      ? { allowed: true }
+      : { allowed: false, status: 403, message: 'Access denied' };
+  }
 
-  const totalCgstCustomer = asAmount((pb.cgstOnFood ?? (gstOnFood / 2)) + (pb.cgstOnPackaging ?? (packagingGst / 2)) + cgstDelivery + (pb.cgstPlatform ?? (platformGST / 2)));
-  const totalSgstCustomer = asAmount((pb.sgstOnFood ?? (gstOnFood / 2)) + (pb.sgstOnPackaging ?? (packagingGst / 2)) + sgstDelivery + (pb.sgstPlatform ?? (platformGST / 2)));
-  const totalGstCustomer = asAmount(totalCgstCustomer + totalSgstCustomer);
-
-  const commissionAmount = asAmount(
-    (pb.totalAdminCommissionDeduction ?? 0) - (pb.adminCommissionGst ?? 0),
-  );
-  const commissionBase = asAmount(pb.priceAfterRestaurantDiscount ?? pb.taxableAmountFood ?? (itemsTotal - restaurantDiscount));
-  const commissionPercent = commissionBase > 0 ? asAmount((commissionAmount / commissionBase) * 100) : 0;
-  const commissionGst = asAmount(pb.adminCommissionGst ?? 0);
-  const commissionGstSplit = splitGst(commissionGst);
-
-  const restaurantGross = asAmount(pb.restaurantGross ?? (commissionBase + packagingCharge));
-  const netEarning = asAmount(pb.restaurantNet ?? 0);
-
-  const riderDeliveryCharge = asAmount(rider.deliveryCharge ?? 0);
-  const riderPlatformCredit = asAmount(rider.platformFee ?? 0);
-  const riderIncentive = asAmount(rider.incentive ?? 0);
-  const riderTip = asAmount(rider.tip ?? order.tip ?? 0);
-  const riderIncentivePercent = asAmount(rider.incentivePercentAtCompletion ?? 0);
-  const riderTotalEarning = asAmount(rider.totalRiderEarning ?? (riderDeliveryCharge + riderPlatformCredit + riderIncentive + riderTip));
-
-  const totalCollectionFromCustomer = asAmount(
-    pb.platformBillTotal
-    ?? (deliveryFee + deliveryGST + platformFee + platformGST),
-  );
-  const sharedWithRider = asAmount(riderDeliveryCharge + riderPlatformCredit);
-  const retainedByPlatform = asAmount(totalCollectionFromCustomer - sharedWithRider);
-
-  const gstOnCommission = commissionGst;
-  const platformCgst = asAmount(pb.cgstPlatform ?? (platformGST / 2));
-  const platformSgst = asAmount(pb.sgstPlatform ?? (platformGST - platformCgst));
-  const totalCgstPlatform = asAmount(commissionGstSplit.cgst + platformCgst);
-  const totalSgstPlatform = asAmount(commissionGstSplit.sgst + platformSgst);
-  const totalGstPlatform = asAmount(totalCgstPlatform + totalSgstPlatform);
-  const netPlatformEarning = asAmount(commissionAmount + retainedByPlatform);
-
-  return {
-    customerBill: {
-      itemsTotal,
-      restaurantDiscount,
-      platformDiscount,
-      subTotal,
-      gstOnFood,
-      cgstFood,
-      sgstFood,
-      packagingCharge,
-      deliveryFee,
-      deliveryGST,
-      cgstDelivery,
-      sgstDelivery,
-      platformFee,
-      tip,
-      totalGstSummary: {
-        totalCgst: totalCgstCustomer,
-        totalSgst: totalSgstCustomer,
-        totalGst: totalGstCustomer,
-      },
-      totalPayable: asAmount(order.totalAmount ?? 0),
-      paymentMethod: order.paymentMethod || null,
-      paymentStatus: order.paymentStatus || null,
-      items: Array.isArray(order.items)
-        ? order.items.map((item) => ({
-          name: typeof item?.name === 'string' ? item.name : (item?.name?.en || item?.name?.de || item?.name?.ar || 'Item'),
-          quantity: Number(item?.quantity || 0),
-          price: asAmount(item?.price || 0),
-          lineTotal: asAmount(item?.lineTotal || 0),
-        }))
-        : [],
-    },
-    restaurantBill: {
-      itemsTotal,
-      restaurantDiscount,
-      packaging: packagingCharge,
-      restaurantGross,
-      gstCollected: {
-        gstOnFood,
-        cgstFood,
-        sgstFood,
-      },
-      commission: {
-        commissionPercent,
-        commissionAmount,
-      },
-      commissionGst: {
-        gstOnCommission,
-        cgstOnCommission: commissionGstSplit.cgst,
-        sgstOnCommission: commissionGstSplit.sgst,
-      },
-      netEarning,
-    },
-    riderBill: {
-      deliveryCharge: riderDeliveryCharge,
-      platformFeeCredit: riderPlatformCredit,
-      incentive: {
-        incentivePercent: riderIncentivePercent,
-        incentiveAmount: riderIncentive,
-      },
-      earningsBreakdown: {
-        deliveryCharge: riderDeliveryCharge,
-        platformCredit: riderPlatformCredit,
-        incentive: riderIncentive,
-        tip: riderTip,
-      },
-      tip: riderTip,
-      totalEarning: riderTotalEarning,
-      walletCreditNote: 'Credited to rider wallet after delivery',
-    },
-    platformBill: {
-      commission: {
-        commissionPercent,
-        commissionAmount,
-      },
-      commissionGst: {
-        cgstCommission: commissionGstSplit.cgst,
-        sgstCommission: commissionGstSplit.sgst,
-        totalCommissionGst: commissionGstSplit.total,
-      },
-      platformFee,
-      deliveryCharges: deliveryFee,
-      customerTipPassedToRider: riderTip,
-      totalCollectionFromCustomer,
-      sharedWithRider,
-      retainedByPlatform,
-      gstBreakdown: {
-        gstOnCommission,
-        deliveryGST,
-        cgstDelivery,
-        sgstDelivery,
-        platformGST,
-        totalCgst: totalCgstPlatform,
-        totalSgst: totalSgstPlatform,
-        totalGst: totalGstPlatform,
-      },
-      netPlatformEarning,
-    },
-  };
+  return { allowed: false, status: 403, message: 'Access denied' };
 };
 
 /** GET /orders/:id/customer-bill — Customer fetches their receipt */
@@ -3488,6 +3366,35 @@ exports.getAdminBills = async (req, res) => {
     });
   } catch (err) {
     return sendError(res, 500, 'Failed to fetch admin bills', err.message);
+  }
+};
+
+exports.getOrderInvoice = async (req, res) => {
+  try {
+    const order = await Order.findById(req.params.id)
+      .populate('customer', 'name email phone mobile')
+      .populate('restaurant', 'name address taxConfig contactNumber')
+      .populate({ path: 'rider', populate: { path: 'user', select: 'name phone mobile' } });
+
+    if (!order) return sendError(res, 404, 'Order not found');
+
+    const access = await canAccessOrderBilling(req, order);
+    if (!access.allowed) {
+      return sendError(res, access.status, access.message);
+    }
+
+    const billing = buildBillingSectionsFromOrder(order.toObject ? order.toObject() : order);
+    const validation = validateBillingData(billing);
+    if (!validation.isValid) {
+      return sendError(res, 500, 'Billing validation failed', validation.issues);
+    }
+
+    const pdfBuffer = await generateInvoicePdfBuffer(order.toObject ? order.toObject() : order, billing);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename=invoice_${order._id}.pdf`);
+    return res.status(200).send(pdfBuffer);
+  } catch (err) {
+    return sendError(res, 500, 'Failed to generate invoice PDF', err.message);
   }
 };
 

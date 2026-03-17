@@ -75,6 +75,7 @@ const {
   getRestaurantBill,
   getRiderBill,
   getAdminBills,
+  getOrderInvoice,
   getRestaurantBillingHistory,
   getRiderBillingHistory,
 } = require("../controllers/orderController");
@@ -121,5 +122,6 @@ router.get('/:id/customer-bill',  protect, customer,        generalOrderLimiter,
 router.get('/:id/restaurant-bill',protect, restaurantOwner, generalOrderLimiter, getRestaurantBill);
 router.get('/:id/rider-bill',     protect, rider,           generalOrderLimiter, getRiderBill);
 router.get('/:id/bills',          protect, admin,           generalOrderLimiter, getAdminBills);
+router.get('/:id/invoice',        protect,                  generalOrderLimiter, getOrderInvoice);
 
 module.exports = router;
