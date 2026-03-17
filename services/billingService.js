@@ -518,92 +518,241 @@ async function generateCustomerInvoicePdfBuffer(order, billing) {
     const customer = order?.customer || {};
     const restaurant = order?.restaurant || {};
     const customerBill = billing.customerBill;
-    const visibleGstTotal = r2(
-      (customerBill.gstOnFood.total || 0)
-      + (customerBill.packaging.gst || 0)
-      + (customerBill.platformFee.gst || 0)
-      + (customerBill.delivery.gst || 0)
-    );
+    const foodInvoiceTotal = r2(customerBill.subTotal + customerBill.gstOnFood.total + customerBill.packaging.charge + customerBill.packaging.gst);
+    const chargeInvoiceTotal = r2(customerBill.platformFee.finalAmount + customerBill.platformFee.gst + customerBill.delivery.finalCharge + customerBill.delivery.gst + customerBill.tip + customerBill.smallCartFee);
+    const combinedInvoiceTotal = r2(foodInvoiceTotal + chargeInvoiceTotal);
 
-    doc.font('Helvetica-Bold').fontSize(18).text('Customer Invoice', { align: 'center' });
-    doc.moveDown(0.6);
+    const toWords = (num) => {
+      const n = Math.floor(Math.max(0, Number(num) || 0));
+      const paise = Math.round((Math.max(0, Number(num) || 0) - n) * 100);
+      const ones = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine', 'Ten', 'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen', 'Seventeen', 'Eighteen', 'Nineteen'];
+      const tens = ['', '', 'Twenty', 'Thirty', 'Forty', 'Fifty', 'Sixty', 'Seventy', 'Eighty', 'Ninety'];
 
-    drawSectionHeading(doc, 'Order Info');
-    drawInfoLine(doc, 'Order ID:', billing.orderMeta.orderId || '');
-    drawInfoLine(doc, 'Status:', billing.orderMeta.status || '');
-    drawInfoLine(doc, 'Created At:', billing.orderMeta.createdAt ? new Date(billing.orderMeta.createdAt).toISOString() : '');
-    drawInfoLine(doc, 'Customer:', customer?.name || customer?.firstName || billing.orderMeta.customerId || '');
-    drawInfoLine(doc, 'Restaurant:', restaurant?.name?.en || restaurant?.name || billing.orderMeta.restaurantId || '');
-    drawInfoLine(doc, 'Payment Method:', billing.orderMeta.paymentMethod || '');
-    drawInfoLine(doc, 'Payment Status:', billing.orderMeta.paymentStatus || '');
+      const twoDigits = (value) => {
+        if (value < 20) return ones[value];
+        return `${tens[Math.floor(value / 10)]}${value % 10 ? ` ${ones[value % 10]}` : ''}`.trim();
+      };
 
-    drawAmountTable(
-      doc,
-      'Items Table',
-      customerBill.items.map((item) => [
-        `${item.name} x ${item.qty} @ ${formatCurrency(item.rate)}`,
-        formatCurrency(item.total),
-      ]),
-    );
+      const threeDigits = (value) => {
+        const hundred = Math.floor(value / 100);
+        const rest = value % 100;
+        if (!hundred) return twoDigits(rest);
+        return `${ones[hundred]} Hundred${rest ? ` ${twoDigits(rest)}` : ''}`.trim();
+      };
 
-    drawAmountTable(doc, 'Pricing Summary', [
-      ['Items Total', formatCurrency(customerBill.itemsTotal)],
-      ['Restaurant Discount', formatCurrency(-customerBill.restaurantDiscount)],
-      ['Sub Total', formatCurrency(customerBill.subTotal)],
-    ]);
+      let value = n;
+      const parts = [];
+      const crore = Math.floor(value / 10000000);
+      if (crore) {
+        parts.push(`${threeDigits(crore)} Crore`);
+        value %= 10000000;
+      }
+      const lakh = Math.floor(value / 100000);
+      if (lakh) {
+        parts.push(`${threeDigits(lakh)} Lakh`);
+        value %= 100000;
+      }
+      const thousand = Math.floor(value / 1000);
+      if (thousand) {
+        parts.push(`${threeDigits(thousand)} Thousand`);
+        value %= 1000;
+      }
+      if (value) {
+        parts.push(threeDigits(value));
+      }
+      const rupeesWords = parts.join(' ').trim() || 'Zero';
+      const paiseWords = paise > 0 ? ` and ${twoDigits(paise)} Paise` : '';
+      return `${rupeesWords} Rupees${paiseWords} only`;
+    };
 
-    const gstRows = [
-      [`Food GST (${formatAmount(customerBill.gstOnFood.percent)}%)`, formatCurrency(customerBill.gstOnFood.total)],
-      [`CGST (${formatAmount(customerBill.gstOnFood.percent / 2)}%)`, formatCurrency(customerBill.gstOnFood.cgst)],
-      [`SGST (${formatAmount(customerBill.gstOnFood.percent / 2)}%)`, formatCurrency(customerBill.gstOnFood.sgst)],
-      ['Packaging CGST', formatCurrency(customerBill.packaging.cgst)],
-      ['Packaging SGST', formatCurrency(customerBill.packaging.sgst)],
-      ['Platform CGST', formatCurrency(customerBill.platformFee.cgst)],
-      ['Platform SGST', formatCurrency(customerBill.platformFee.sgst)],
-    ];
-    if (customerBill.delivery.gst > 0) {
-      gstRows.push(['Delivery CGST', formatCurrency(customerBill.delivery.cgst)]);
-      gstRows.push(['Delivery SGST', formatCurrency(customerBill.delivery.sgst)]);
-    }
-    gstRows.push(['Visible GST Total', formatCurrency(visibleGstTotal)]);
-    drawAmountTable(doc, 'GST Breakdown', gstRows);
+    const drawInvoiceFrame = ({ invoiceNo, orderDisplayId, pageDate, rows, totals, totalAmount, issuedByLabel }) => {
+      const left = doc.page.margins.left;
+      const width = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+      let y = doc.page.margins.top;
 
-    drawAmountTable(doc, 'Charges', [
-      ['Packaging Charge', formatCurrency(customerBill.packaging.charge)],
-      ['Packaging GST', formatCurrency(customerBill.packaging.gst)],
-      ['Platform Fee', formatCurrency(customerBill.platformFee.amount)],
-      ['Platform Fee Discount', formatCurrency(-customerBill.platformFee.discountApplied)],
-      ['Platform Fee Final', formatCurrency(customerBill.platformFee.finalAmount)],
-      ['Platform GST', formatCurrency(customerBill.platformFee.gst)],
-      ['Delivery Fee', formatCurrency(customerBill.delivery.originalCharge)],
-      ['Delivery Discount', formatCurrency(-customerBill.delivery.discountApplied)],
-      ['Final Delivery', formatCurrency(customerBill.delivery.finalCharge)],
-      ...(customerBill.delivery.gst > 0 ? [['Delivery GST', formatCurrency(customerBill.delivery.gst)]] : []),
-    ]);
+      doc.rect(left, y, width, 36).stroke('#444444');
+      doc.font('Helvetica-Bold').fontSize(16).text('Tax Invoice', left, y + 9, { width, align: 'center' });
+      y += 42;
 
-    const couponLabel = customerBill.couponType === 'free_delivery'
-      ? `Free Delivery Applied (-${formatCurrency(customerBill.delivery.discountApplied)})`
-      : (customerBill.couponCode ? `Coupon Applied (${customerBill.couponCode})` : 'Coupon');
-    const couponAmount = customerBill.couponType === 'free_delivery'
-      ? formatCurrency(-customerBill.delivery.discountApplied)
-      : formatCurrency(-customerBill.couponDiscount);
-    drawAmountTable(doc, 'Coupon', [
-      [couponLabel, couponAmount],
-    ]);
+      const leftW = 230;
+      const rightW = width - leftW;
+      const headerH = 160;
+      doc.rect(left, y, leftW, headerH).stroke('#444444');
+      doc.rect(left + leftW, y, rightW, headerH).stroke('#444444');
 
-    drawAmountTable(doc, 'Tip', [
-      ['Tip', formatCurrency(customerBill.tip)],
-    ]);
+      doc.font('Helvetica').fontSize(9).text('Invoice To', left + 6, y + 8);
+      doc.font('Helvetica-Bold').fontSize(10.5).text(customer?.name || customer?.firstName || '', left + 6, y + 28, { width: leftW - 12 });
+      const customerAddress = [
+        customer?.address?.street,
+        customer?.address?.city,
+        customer?.address?.state,
+        customer?.address?.country,
+        customer?.address?.zipCode,
+      ].filter(Boolean).join(', ');
+      doc.font('Helvetica').fontSize(9).text(customerAddress || 'Address not available', left + 6, y + 50, { width: leftW - 12 });
 
-    drawAmountTable(doc, 'Final Total', [
-      ['Small Cart Fee', formatCurrency(customerBill.smallCartFee)],
-      ['Final Payable Amount', formatCurrency(customerBill.finalPayableAmount)],
-    ]);
+      doc.moveTo(left, y + 86).lineTo(left + leftW, y + 86).stroke('#444444');
+      doc.font('Helvetica-Bold').fontSize(8.5).text(issuedByLabel, left + 6, y + 92, { width: leftW - 12 });
+      doc.font('Helvetica-Bold').fontSize(10.5).text(restaurant?.name?.en || restaurant?.name || '', left + 6, y + 120, { width: leftW - 12 });
+      const gstNo = restaurant?.taxConfig?.gstNumber || 'NA';
+      doc.font('Helvetica-Bold').fontSize(10.5).text(`GSTIN: ${gstNo}`, left + 6, y + 138, { width: leftW - 12 });
 
-    if (!billing.validation.isValid) {
-      drawSectionHeading(doc, 'Validation Notes');
+      const rightTopH = 54;
+      doc.moveTo(left + leftW, y + rightTopH).lineTo(left + width, y + rightTopH).stroke('#444444');
+      const c1 = 0.42;
+      const c2 = 0.28;
+      const x1 = left + leftW + (rightW * c1);
+      const x2 = x1 + (rightW * c2);
+      doc.moveTo(x1, y).lineTo(x1, y + rightTopH).stroke('#444444');
+      doc.moveTo(x2, y).lineTo(x2, y + rightTopH).stroke('#444444');
+      doc.font('Helvetica-Bold').fontSize(8.5).text('Invoice No', left + leftW + 6, y + 8);
+      doc.font('Helvetica').fontSize(11).text(invoiceNo, left + leftW + 6, y + 24, { width: (x1 - (left + leftW)) - 12 });
+      doc.font('Helvetica-Bold').fontSize(8.5).text('Order Id:', x1 + 6, y + 8);
+      doc.font('Helvetica').fontSize(11).text(String(orderDisplayId || ''), x1 + 6, y + 24, { width: (x2 - x1) - 12 });
+      doc.font('Helvetica-Bold').fontSize(8.5).text('Date', x2 + 6, y + 8);
+      doc.font('Helvetica').fontSize(11).text(pageDate, x2 + 6, y + 24, { width: (left + width - x2) - 12 });
+
+      y += headerH;
+
+      const tableHeaderH = 34;
+      doc.rect(left, y, width, tableHeaderH).fillAndStroke('#D9D9D9', '#444444');
+      doc.fillColor('#000000').font('Helvetica-Bold').fontSize(9.5);
+      const cols = [
+        { key: 'sno', label: 'S.No.', w: 48, align: 'center' },
+        { key: 'name', label: 'Name', w: 202, align: 'left' },
+        { key: 'price', label: 'Item Price', w: 96, align: 'right' },
+        { key: 'hsn', label: 'HSN Code', w: 122, align: 'center' },
+        { key: 'gst', label: 'GST', w: 68, align: 'center' },
+        { key: 'qty', label: 'Qty', w: 62, align: 'center' },
+        { key: 'taxable', label: 'Taxable\nAmount', w: width - (48 + 202 + 96 + 122 + 68 + 62), align: 'right' },
+      ];
+
+      let x = left;
+      cols.forEach((col) => {
+        doc.rect(x, y, col.w, tableHeaderH).stroke('#444444');
+        doc.text(col.label, x + 4, y + 8, { width: col.w - 8, align: col.align });
+        x += col.w;
+      });
+
+      y += tableHeaderH;
+      const rowH = 28;
       doc.font('Helvetica').fontSize(10);
-      billing.validation.issues.forEach((issue) => doc.text(`- ${issue}`));
+      rows.forEach((row) => {
+        let rowX = left;
+        cols.forEach((col) => {
+          doc.rect(rowX, y, col.w, rowH).stroke('#444444');
+          const value = row[col.key] ?? '';
+          doc.text(String(value), rowX + 4, y + 8, { width: col.w - 8, align: col.align });
+          rowX += col.w;
+        });
+        y += rowH;
+      });
+
+      const totalsBlockH = 26 + (totals.length * 24);
+      doc.rect(left, y, width, totalsBlockH).stroke('#444444');
+      const labelW = width - 110;
+      let totalsY = y + 10;
+      doc.font('Helvetica').fontSize(10);
+      totals.forEach((line) => {
+        doc.text(line.label, left + 8, totalsY, { width: labelW - 16, align: 'right' });
+        doc.text(line.amount, left + labelW, totalsY, { width: 98, align: 'right' });
+        totalsY += 24;
+      });
+      y += totalsBlockH;
+
+      doc.rect(left, y, width - 110, 30).stroke('#444444');
+      doc.rect(left + width - 110, y, 110, 30).stroke('#444444');
+      doc.font('Helvetica-Bold').fontSize(12).text('Total Amount', left + 12, y + 9);
+      doc.font('Helvetica-Bold').fontSize(12).text(totalAmount, left + width - 106, y + 9, { width: 102, align: 'right' });
+      y += 30;
+
+      doc.rect(left, y, width, 32).stroke('#444444');
+      doc.font('Helvetica-Bold').fontSize(10.5).text(toWords(Number(totalAmount.replace('₹', '').replace(/,/g, ''))), left + 12, y + 9, { width: width - 24 });
+      y += 32;
+
+      doc.font('Helvetica').fontSize(10).text('This is computer generated invoice', left, y + 8, { width, align: 'center' });
+    };
+
+    const invoiceDate = billing.orderMeta.createdAt
+      ? new Date(billing.orderMeta.createdAt).toISOString().slice(0, 10)
+      : new Date().toISOString().slice(0, 10);
+
+    const foodRows = customerBill.items.map((item, index) => ({
+      sno: index + 1,
+      name: item.name,
+      price: formatAmount(item.rate),
+      hsn: '996331',
+      gst: `${formatAmount(customerBill.gstOnFood.percent)}%`,
+      qty: item.qty,
+      taxable: formatAmount(item.total),
+    }));
+
+    const foodTotals = [
+      { label: 'Total', amount: formatAmount(customerBill.itemsTotal) },
+      { label: 'Discount', amount: formatAmount(customerBill.restaurantDiscount) },
+      { label: `CGST @${formatAmount(customerBill.gstOnFood.percent / 2)}%`, amount: formatAmount(customerBill.gstOnFood.cgst) },
+      { label: `SGST @${formatAmount(customerBill.gstOnFood.percent / 2)}%`, amount: formatAmount(customerBill.gstOnFood.sgst) },
+      { label: 'Total GST Amount', amount: formatAmount(customerBill.gstOnFood.total) },
+      { label: 'Packaging Charges', amount: formatAmount(customerBill.packaging.charge) },
+      { label: 'GST on Packaging Charges', amount: formatAmount(customerBill.packaging.gst) },
+    ];
+
+    drawInvoiceFrame({
+      invoiceNo: `FD/${String(billing.orderMeta.orderId || '').slice(-6)}/01`,
+      orderDisplayId: billing.orderMeta.orderId || '',
+      pageDate: invoiceDate,
+      rows: foodRows,
+      totals: foodTotals,
+      totalAmount: formatCurrency(foodInvoiceTotal),
+      issuedByLabel: 'Invoice issued by Foodie on behalf of:',
+    });
+
+    doc.addPage();
+
+    const chargeRows = [
+      {
+        sno: 1,
+        name: 'Platform Fee',
+        price: formatAmount(customerBill.platformFee.finalAmount),
+        hsn: '996211',
+        gst: `${formatAmount(customerBill.platformFee.finalAmount > 0 ? (customerBill.platformFee.gst / customerBill.platformFee.finalAmount) * 100 : 0)}%`,
+        qty: 1,
+        taxable: formatAmount(customerBill.platformFee.finalAmount),
+      },
+    ];
+
+    const chargeTotals = [
+      { label: 'Total', amount: formatAmount(customerBill.platformFee.finalAmount) },
+      { label: `CGST @${formatAmount((customerBill.platformFee.finalAmount > 0 ? (customerBill.platformFee.gst / customerBill.platformFee.finalAmount) * 100 : 0) / 2)}%`, amount: formatAmount(customerBill.platformFee.cgst) },
+      { label: `SGST @${formatAmount((customerBill.platformFee.finalAmount > 0 ? (customerBill.platformFee.gst / customerBill.platformFee.finalAmount) * 100 : 0) / 2)}%`, amount: formatAmount(customerBill.platformFee.sgst) },
+      { label: 'Total GST Amount', amount: formatAmount(customerBill.platformFee.gst) },
+      { label: 'Delivery Charges', amount: formatAmount(customerBill.delivery.originalCharge) },
+      { label: 'Delivery Discount', amount: formatAmount(customerBill.delivery.discountApplied) },
+      { label: 'Final Delivery Charges', amount: formatAmount(customerBill.delivery.finalCharge) },
+      ...(customerBill.delivery.gst > 0
+        ? [{ label: 'Delivery Charges GST', amount: formatAmount(customerBill.delivery.gst) }]
+        : []),
+      ...(customerBill.couponType === 'free_delivery'
+        ? [{ label: 'Free Delivery Applied', amount: formatAmount(customerBill.delivery.discountApplied) }]
+        : [{ label: 'Coupon Discount', amount: formatAmount(customerBill.couponDiscount) }]),
+      { label: 'Tip', amount: formatAmount(customerBill.tip) },
+      { label: 'Small Cart Fee', amount: formatAmount(customerBill.smallCartFee) },
+    ];
+
+    drawInvoiceFrame({
+      invoiceNo: `FD/${String(billing.orderMeta.orderId || '').slice(-6)}/02`,
+      orderDisplayId: billing.orderMeta.orderId || '',
+      pageDate: invoiceDate,
+      rows: chargeRows,
+      totals: chargeTotals,
+      totalAmount: formatCurrency(chargeInvoiceTotal),
+      issuedByLabel: 'Invoice issued by Foodie:',
+    });
+
+    if (!nearlyEqual(combinedInvoiceTotal, customerBill.finalPayableAmount)) {
+      doc.addPage();
+      doc.font('Helvetica-Bold').fontSize(12).text('Validation Notes');
+      doc.font('Helvetica').fontSize(10).text(`Combined customer invoice total ${formatCurrency(combinedInvoiceTotal)} does not match final payable ${formatCurrency(customerBill.finalPayableAmount)}.`);
     }
   });
 }
